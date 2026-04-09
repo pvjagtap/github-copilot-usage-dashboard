@@ -4,6 +4,9 @@ node_modules
 .gitignore
 tsconfig.json
 gen-icon.ps1
+images/image.png
+images/icon.svg
+images/icon-512.png
 **/*.ts
 **/*.map
 **/*.vsix
