@@ -187,9 +187,4 @@ All data stays local. The extension only reads files from your VS Code `workspac
 
 [MIT](LICENSE)
 
----
 
-## Related
-
-- [copilot-token-usage](https://github.com/pvjagtap/copilot-token-usage) — Python CLI version with SQLite backend and web dashboard
-- [claude-usage](https://github.com/pvjagtap/claude-usage) — Claude Code token usage scanner and dashboard
