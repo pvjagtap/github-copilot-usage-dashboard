@@ -1,7 +1,7 @@
 # Copilot Usage Dashboard
 
 <p align="center">
-  <img src="images/icon.svg" width="128" height="128" alt="Copilot Usage Dashboard Logo">
+  <img src="images/icon.png" width="128" height="128" alt="Copilot Usage Dashboard Logo">
 </p>
 
 <p align="center">
