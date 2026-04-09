@@ -1,0 +1,62 @@
+{
+  "name": "copilot-usage-dashboard",
+  "displayName": "Copilot Usage Dashboard",
+  "description": "Live token usage dashboard for GitHub Copilot — prompt, output, and cached tokens with full analytics.",
+  "version": "0.1.2",
+  "publisher": "pvjagtap",
+  "icon": "images/icon.png",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pvjagtap/copilot-usage-dashboard"
+  },
+  "homepage": "https://github.com/pvjagtap/copilot-usage-dashboard#readme",
+  "bugs": {
+    "url": "https://github.com/pvjagtap/copilot-usage-dashboard/issues"
+  },
+  "keywords": [
+    "copilot",
+    "token",
+    "usage",
+    "dashboard",
+    "analytics",
+    "opentelemetry",
+    "github"
+  ],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Visualization"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "copilotUsage.openDashboard",
+        "title": "Copilot Usage: Open Dashboard"
+      },
+      {
+        "command": "copilotUsage.refresh",
+        "title": "Copilot Usage: Refresh Stats"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^8.58.1",
+    "@typescript-eslint/parser": "^8.58.1",
+    "eslint": "^9.39.4",
+    "typescript": "^5.3.0"
+  }
+}

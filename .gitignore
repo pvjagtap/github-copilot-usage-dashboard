@@ -1,0 +1,4 @@
+node_modules/
+out/
+*.vsix
+gen-icon.ps1
