@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { OTelReceiver } from "./otelReceiver";
-import { StatusBarProvider, StatusBarData } from "./statusBar";
+import { StatusBarProvider } from "./statusBar";
 import { DashboardPanel } from "./dashboardPanel";
 import { scanWorkspaceStorage, ScanResult } from "./scanner";
 import { buildDashboardData, DashboardData } from "./dashboardData";
@@ -131,10 +131,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   // Handle refresh rate changes from dashboard webview
-  let currentRefreshMs = DEFAULT_REFRESH_MS;
   DashboardPanel.onRefreshRateChange = (intervalMs: number) => {
     if (scanTimer) { clearInterval(scanTimer); scanTimer = undefined; }
-    currentRefreshMs = intervalMs;
     if (intervalMs > 0) {
       scanTimer = setInterval(async () => {
         await runScan();
