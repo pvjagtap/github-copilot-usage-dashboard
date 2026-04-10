@@ -176,10 +176,12 @@ const RANGE_LABELS = {'7d':'Last 7 Days','30d':'Last 30 Days','90d':'Last 90 Day
 const KNOWN_MULT = {'claude-opus':3,'claude-sonnet':1,'claude-haiku':0.25,'gpt-5':1,'gpt-4.1':1,'gpt-4o-mini':0.25,'gpt-4.1-mini':0.25,'o3':3,'o3-mini':0.25,'o4-mini':0.25,'gemini-2.5-pro':3,'gemini-2.0-flash':0.25};
 
 const vscode = acquireVsCodeApi();
-let selectedRange = '30d';
-let selectedModels = new Set(DATA.allModels);
-let selectedRefresh = 120;
+const _saved = vscode.getState() || {};
+let selectedRange = _saved.selectedRange || '30d';
+let selectedModels = _saved.selectedModels ? new Set(_saved.selectedModels.filter(m => DATA.allModels.includes(m))) : new Set(DATA.allModels);
+let selectedRefresh = typeof _saved.selectedRefresh === 'number' ? _saved.selectedRefresh : 120;
 let charts = {};
+function _saveState() { vscode.setState({ selectedRange, selectedRefresh, selectedModels: Array.from(selectedModels) }); }
 
 function fmt(n) {
   if (n >= 1e9) return (n/1e9).toFixed(2)+'B';
@@ -218,7 +220,8 @@ function cutoff(r) {
 function buildFilterBar() {
   let h = '<span style="font-size:11px;color:var(--muted);text-transform:uppercase;font-weight:600;">Models</span>';
   DATA.allModels.forEach(m => {
-    h += ' <label><input type="checkbox" data-model="'+esc(m)+'" checked onchange="toggleModel(this)"> <span class="model-tag '+mc(m)+'">'+esc(m)+'</span></label>';
+    const chk = selectedModels.has(m) ? ' checked' : '';
+    h += ' <label><input type="checkbox" data-model="'+esc(m)+'"'+chk+' onchange="toggleModel(this)"> <span class="model-tag '+mc(m)+'">'+esc(m)+'</span></label>';
   });
   h += ' <button class="btn-sm" onclick="pickAll()">All</button><button class="btn-sm" onclick="pickNone()">None</button>';
   h += '<div class="range-btns">';
@@ -231,11 +234,11 @@ function buildFilterBar() {
   h += '<button class="btn-refresh" onclick="manualRefresh(this)" title="Refresh now">&#x21bb;</button>';
   document.getElementById('filter-bar').innerHTML = h;
 }
-function toggleModel(cb) { if(cb.checked) selectedModels.add(cb.dataset.model); else selectedModels.delete(cb.dataset.model); render(); }
-function pickAll() { DATA.allModels.forEach(m=>selectedModels.add(m)); document.querySelectorAll('#filter-bar input').forEach(c=>c.checked=true); render(); }
-function pickNone() { selectedModels.clear(); document.querySelectorAll('#filter-bar input').forEach(c=>c.checked=false); render(); }
-function setRange(btn, r) { selectedRange=r; btn.closest('.range-btns').querySelectorAll('.range-btn').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); render(); }
-function setRefresh(btn, secs) { selectedRefresh=secs; btn.closest('.refresh-btns').querySelectorAll('.range-btn').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); vscode.postMessage({type:'refreshRate',intervalMs:secs*1000}); }
+function toggleModel(cb) { if(cb.checked) selectedModels.add(cb.dataset.model); else selectedModels.delete(cb.dataset.model); _saveState(); render(); }
+function pickAll() { DATA.allModels.forEach(m=>selectedModels.add(m)); document.querySelectorAll('#filter-bar input').forEach(c=>c.checked=true); _saveState(); render(); }
+function pickNone() { selectedModels.clear(); document.querySelectorAll('#filter-bar input').forEach(c=>c.checked=false); _saveState(); render(); }
+function setRange(btn, r) { selectedRange=r; btn.closest('.range-btns').querySelectorAll('.range-btn').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); _saveState(); render(); }
+function setRefresh(btn, secs) { selectedRefresh=secs; btn.closest('.refresh-btns').querySelectorAll('.range-btn').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); _saveState(); vscode.postMessage({type:'refreshRate',intervalMs:secs*1000}); }
 function manualRefresh(btn) { btn.classList.add('spinning'); vscode.postMessage({type:'manualRefresh'}); setTimeout(()=>btn.classList.remove('spinning'),800); }
 
 function render() {
