@@ -32,11 +32,12 @@
 
 ## Install
 
-From VSIX:
+From [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=pvjagtap.copilot-usage-dashboard):
 
-```
-code --install-extension copilot-usage-dashboard-0.1.3.vsix
-```
+1. Open VS Code
+2. Go to Extensions (Ctrl+Shift+X)
+3. Search for "Copilot Usage Dashboard"
+4. Click Install
 
 From source:
 
