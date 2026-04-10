@@ -29,6 +29,14 @@ export interface SubagentRow {
   count: number;
 }
 
+export interface TurnRow {
+  sessionId: string;
+  timestamp: string;
+  model: string;
+  prompt: number;
+  output: number;
+}
+
 export interface SessionView {
   sessionId: string;
   sessionShort: string;
@@ -63,6 +71,7 @@ export interface DashboardData {
   sessionsAll: SessionView[];
   toolsAll: ToolRow[];
   subagentsAll: SubagentRow[];
+  turnsAll: TurnRow[];
   liveOtel: LiveOtelData;
   scanStats: ScanStats;
   generatedAt: string;
@@ -222,12 +231,23 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
     liveOtel = { requests: 0, prompt: 0, completion: 0, cached: 0, traceCached: 0, metricCached: 0, lastSeen: "", byModel: [] };
   }
 
+  const turnsAll: TurnRow[] = scan.turns
+    .filter(t => t.timestamp)
+    .map(t => ({
+      sessionId: t.sessionId,
+      timestamp: t.timestamp,
+      model: t.modelFamily || 'unknown',
+      prompt: t.promptTokens,
+      output: t.outputTokens,
+    }));
+
   return {
     allModels,
     dailyByModel,
     sessionsAll,
     toolsAll,
     subagentsAll,
+    turnsAll,
     liveOtel,
     scanStats: scan.stats,
     generatedAt: new Date().toISOString().slice(0, 19).replace("T", " "),

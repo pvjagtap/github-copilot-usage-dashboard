@@ -124,6 +124,12 @@ td { padding: 8px; border-bottom: 1px solid var(--border); font-size: 12px; }
 .chart-wide { grid-column: 1 / -1; }
 .chart-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
 .chart-card h3 { font-size: 13px; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+.chart-card canvas#modelChart { max-height: 500px; }
+.tz-toggle { display: inline-flex; gap: 0; margin-left: auto; }
+.tz-btn { font-size: 11px; padding: 3px 10px; background: var(--card); color: var(--muted); border: 1px solid var(--border); cursor: pointer; }
+.tz-btn:first-child { border-radius: 4px 0 0 4px; }
+.tz-btn:last-child { border-radius: 0 4px 4px 0; }
+.tz-btn.active { background: var(--blue); color: #fff; border-color: var(--blue); }
 .empty-panel { color: var(--muted); font-size: 13px; padding: 20px; text-align: center; }
 .note { color: var(--muted); font-size: 11px; line-height: 1.5; margin-bottom: 8px; }
 .pill { font-size: 10px; padding: 1px 6px; border-radius: 3px; background: var(--card); border: 1px solid var(--border); color: var(--muted); white-space: nowrap; display: inline-block; margin: 1px; }
@@ -160,11 +166,12 @@ td { padding: 8px; border-bottom: 1px solid var(--border); font-size: 12px; }
   <div class="chart-card"><h3>By Model</h3><canvas id="modelChart"></canvas></div>
   <div class="chart-card"><h3>Top Projects by Tokens</h3><canvas id="projectChart"></canvas></div>
   <div class="chart-card"><h3>Top Tools</h3><canvas id="toolChart"></canvas></div>
+  <div id="subagent-section"></div>
 </div>
 <div id="sessions-section"></div>
 <div id="model-section"></div>
-<div id="subagent-section"></div>
 <div class="chart-card" style="margin-bottom:16px"><h3>Daily Token Usage</h3><canvas id="dailyChart"></canvas></div>
+<div class="chart-card" style="margin-bottom:16px"><div style="display:flex;align-items:center"><h3 style="flex:1" id="hourlyTitle">Average Hourly Distribution</h3><div class="tz-toggle"><button class="tz-btn" onclick="setTz(this,'local')">Local</button><button class="tz-btn active" onclick="setTz(this,'utc')">UTC</button></div></div><canvas id="hourlyChart"></canvas></div>
 <div class="note" style="margin-top:16px;text-align:center;">
   Token counts come from VS Code chatSessions files. Live OTel adds request, prompt, output, and cache-read token visibility.
 </div>
@@ -172,7 +179,7 @@ td { padding: 8px; border-bottom: 1px solid var(--border); font-size: 12px; }
 <script>
 const DATA = ${jsonData};
 const MODEL_COLORS = ['#58a6ff','#3fb950','#bc8cff','#d29922','#f85149','#79c0ff','#f778ba','#a5d6ff'];
-const RANGE_LABELS = {'7d':'Last 7 Days','30d':'Last 30 Days','90d':'Last 90 Days','all':'All Time'};
+const RANGE_LABELS = {'7d':'Last 7 Days','30d':'Last 30 Days','90d':'Last 90 Days','tw':'This Week','tm':'This Month','pm':'Prev Month','all':'All Time'};
 const KNOWN_MULT = {'claude-opus':3,'claude-sonnet':1,'claude-haiku':0.25,'gpt-5':1,'gpt-4.1':1,'gpt-4o-mini':0.25,'gpt-4.1-mini':0.25,'o3':3,'o3-mini':0.25,'o4-mini':0.25,'gemini-2.5-pro':3,'gemini-2.0-flash':0.25};
 
 const vscode = acquireVsCodeApi();
@@ -180,8 +187,9 @@ const _saved = vscode.getState() || {};
 let selectedRange = _saved.selectedRange || '30d';
 let selectedModels = _saved.selectedModels ? new Set(_saved.selectedModels.filter(m => DATA.allModels.includes(m))) : new Set(DATA.allModels);
 let selectedRefresh = typeof _saved.selectedRefresh === 'number' ? _saved.selectedRefresh : 120;
+let selectedTz = _saved.selectedTz || 'utc';
 let charts = {};
-function _saveState() { vscode.setState({ selectedRange, selectedRefresh, selectedModels: Array.from(selectedModels) }); }
+function _saveState() { vscode.setState({ selectedRange, selectedRefresh, selectedModels: Array.from(selectedModels), selectedTz }); }
 
 function fmt(n) {
   if (n >= 1e9) return (n/1e9).toFixed(2)+'B';
@@ -210,12 +218,19 @@ function mbadge(m) {
   if (m < 1) return '<span class="mult-badge mult-low">'+m+'x</span>';
   return '<span class="mult-badge mult-1">'+m+'x</span>';
 }
-function cutoff(r) {
-  if (r === 'all') return '';
-  const d = new Date();
-  d.setDate(d.getDate() - (r === '7d' ? 7 : r === '30d' ? 30 : 90));
-  return d.toISOString().slice(0,10);
+function getRangeBounds(r) {
+  const now = new Date();
+  const iso = d => d.toISOString().slice(0,10);
+  if (r === 'all') return { start: '', end: '' };
+  if (r === '7d') { const d=new Date(now); d.setDate(d.getDate()-7); return {start:iso(d),end:''}; }
+  if (r === '30d') { const d=new Date(now); d.setDate(d.getDate()-30); return {start:iso(d),end:''}; }
+  if (r === '90d') { const d=new Date(now); d.setDate(d.getDate()-90); return {start:iso(d),end:''}; }
+  if (r === 'tw') { const d=new Date(now); const day=d.getDay(); const diff=day===0?6:day-1; d.setDate(d.getDate()-diff); return {start:iso(d),end:''}; }
+  if (r === 'tm') { return {start:iso(new Date(now.getFullYear(),now.getMonth(),1)),end:''}; }
+  if (r === 'pm') { const s=new Date(now.getFullYear(),now.getMonth()-1,1); const e=new Date(now.getFullYear(),now.getMonth(),0); return {start:iso(s),end:iso(e)}; }
+  return {start:'',end:''};
 }
+function rangeIncludesToday(r) { return r !== 'pm'; }
 
 function buildFilterBar() {
   let h = '<span style="font-size:11px;color:var(--muted);text-transform:uppercase;font-weight:600;">Models</span>';
@@ -225,10 +240,10 @@ function buildFilterBar() {
   });
   h += ' <button class="btn-sm" onclick="pickAll()">All</button><button class="btn-sm" onclick="pickNone()">None</button>';
   h += '<div class="range-btns">';
-  ['7d','30d','90d','all'].forEach(r => { h += '<button class="range-btn'+(r===selectedRange?' active':'')+'" onclick="setRange(this,\\''+r+'\\')">'+r+'</button>'; });
+  ['7d','30d','90d','tw','tm','pm','all'].forEach(r => { h += '<button class="range-btn'+(r===selectedRange?' active':'')+'" onclick="setRange(this,\\''+r+'\\')">'+(r==='tw'?'This Week':r==='tm'?'This Month':r==='pm'?'Prev Month':r)+'</button>'; });
   h += '</div>';  h += '<div class="refresh-btns"><span class="refresh-label">Refresh</span>';
   [{l:'30s',v:30},{l:'1m',v:60},{l:'2m',v:120},{l:'5m',v:300},{l:'Off',v:0}].forEach(o => {
-    h += '<button class="range-btn'+(o.v===selectedRefresh?' active':'')+'" onclick="setRefresh(this,'+o.v+')">'+o.l+'</button>';
+    h += '<button class="range-btn'+(o.v===selectedRefresh?' active':'')+'" data-refresh-val="'+o.v+'" onclick="setRefresh(this,'+o.v+')">'+o.l+'</button>';
   });
   h += '</div>';
   h += '<button class="btn-refresh" onclick="manualRefresh(this)" title="Refresh now">&#x21bb;</button>';
@@ -237,17 +252,42 @@ function buildFilterBar() {
 function toggleModel(cb) { if(cb.checked) selectedModels.add(cb.dataset.model); else selectedModels.delete(cb.dataset.model); _saveState(); render(); }
 function pickAll() { DATA.allModels.forEach(m=>selectedModels.add(m)); document.querySelectorAll('#filter-bar input').forEach(c=>c.checked=true); _saveState(); render(); }
 function pickNone() { selectedModels.clear(); document.querySelectorAll('#filter-bar input').forEach(c=>c.checked=false); _saveState(); render(); }
-function setRange(btn, r) { selectedRange=r; btn.closest('.range-btns').querySelectorAll('.range-btn').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); _saveState(); render(); }
+function setRange(btn, r) {
+  selectedRange=r;
+  btn.closest('.range-btns').querySelectorAll('.range-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  _saveState();
+  // Auto-refresh awareness: disable when range doesn't include today
+  if (!rangeIncludesToday(r) && selectedRefresh > 0) {
+    selectedRefresh = 0;
+    _saveState();
+    vscode.postMessage({type:'refreshRate',intervalMs:0});
+    updateRefreshButtons();
+  } else if (rangeIncludesToday(r) && selectedRefresh === 0) {
+    selectedRefresh = 120;
+    _saveState();
+    vscode.postMessage({type:'refreshRate',intervalMs:120000});
+    updateRefreshButtons();
+  }
+  render();
+}
+function updateRefreshButtons() {
+  document.querySelectorAll('.refresh-btns .range-btn').forEach(b => {
+    b.classList.toggle('active', parseInt(b.dataset.refreshVal||'-1') === selectedRefresh);
+  });
+}
+function setTz(btn, tz) { selectedTz=tz; btn.closest('.tz-toggle').querySelectorAll('.tz-btn').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); _saveState(); render(); }
 function setRefresh(btn, secs) { selectedRefresh=secs; btn.closest('.refresh-btns').querySelectorAll('.range-btn').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); _saveState(); vscode.postMessage({type:'refreshRate',intervalMs:secs*1000}); }
 function manualRefresh(btn) { btn.classList.add('spinning'); vscode.postMessage({type:'manualRefresh'}); setTimeout(()=>btn.classList.remove('spinning'),800); }
 
 function render() {
-  const c = cutoff(selectedRange);
-  const sessions = DATA.sessionsAll.filter(s => selectedModels.has(s.model) && (!c || s.lastDate >= c));
+  const bounds = getRangeBounds(selectedRange);
+  const sessions = DATA.sessionsAll.filter(s => selectedModels.has(s.model) && (!bounds.start || s.lastDate >= bounds.start) && (!bounds.end || s.lastDate <= bounds.end));
   const sids = new Set(sessions.map(s=>s.sessionId));
-  const daily = DATA.dailyByModel.filter(d => selectedModels.has(d.model) && (!c || d.day >= c));
+  const daily = DATA.dailyByModel.filter(d => selectedModels.has(d.model) && (!bounds.start || d.day >= bounds.start) && (!bounds.end || d.day <= bounds.end));
   const tools = DATA.toolsAll.filter(t => sids.has(t.sessionId));
   const subs = DATA.subagentsAll.filter(s => sids.has(s.sessionId));
+  const turns = DATA.turnsAll.filter(t => selectedModels.has(t.model) && (!bounds.start || t.timestamp.slice(0,10) >= bounds.start) && (!bounds.end || t.timestamp.slice(0,10) <= bounds.end));
 
   const t = {
     sessions: sessions.length,
@@ -259,11 +299,11 @@ function render() {
     premium: sessions.reduce((s,x)=>s+getMult(x.modelName,x.multiplier)*x.turns,0),
   };
 
-  document.getElementById('subtitle').textContent = 'Updated: '+DATA.generatedAt+' — '+RANGE_LABELS[selectedRange];
-
-  const rl = RANGE_LABELS[selectedRange].toLowerCase();
+  const rl = RANGE_LABELS[selectedRange] || selectedRange;
+  const refreshStatus = selectedRefresh > 0 ? '' : ' (auto-refresh off)';
+  document.getElementById('subtitle').textContent = 'Updated: '+DATA.generatedAt+' — '+rl+refreshStatus;
   document.getElementById('stats-row').innerHTML = [
-    {l:'Sessions',v:t.sessions,s:rl},
+    {l:'Sessions',v:t.sessions,s:rl.toLowerCase()},
     {l:'Turns',v:t.turns,s:rl},
     {l:'Prompt Tokens',v:fmt(t.prompt),s:'input tokens'},
     {l:'Output Tokens',v:fmt(t.output),s:'generated tokens'},
@@ -282,6 +322,7 @@ function render() {
   renderSessions(sessions, subs);
   renderModelTable(sessions);
   renderSubagents(subs);
+  renderHourly(turns);
 }
 
 function renderOtel(live) {
@@ -316,12 +357,12 @@ function renderDaily(daily) {
   daily.forEach(d=>{pMap[d.day]+=d.prompt;oMap[d.day]+=d.output;});
   charts.daily = new Chart(document.getElementById('dailyChart'), {
     type:'bar', data:{labels:days, datasets:[
-      {label:'Prompt',data:days.map(d=>pMap[d]),backgroundColor:'rgba(88,166,255,0.82)'},
-      {label:'Output',data:days.map(d=>oMap[d]),backgroundColor:'rgba(188,140,255,0.82)'}
+      {label:'Prompt',data:days.map(d=>pMap[d]),backgroundColor:'rgba(88,166,255,0.82)',stack:'tokens',yAxisID:'y'},
+      {label:'Output',data:days.map(d=>oMap[d]),backgroundColor:'rgba(188,140,255,0.82)',stack:'tokens',yAxisID:'y'}
     ]},
     options:{responsive:true, plugins:{legend:{labels:{color:'#8b949e'}}}, scales:{
       x:{stacked:true,ticks:{color:'#8b949e',maxRotation:45},grid:{color:'#30363d33'}},
-      y:{stacked:true,ticks:{color:'#8b949e',callback:v=>fmt(v)},grid:{color:'#30363d33'}}
+      y:{position:'left',stacked:true,ticks:{color:'#58a6ff',callback:v=>fmt(v)},grid:{color:'#30363d33'},title:{display:true,text:'Tokens',color:'#58a6ff'}}
     }}
   });
 }
@@ -333,7 +374,7 @@ function renderModelPie(sessions) {
   const sorted=Object.entries(m).sort((a,b)=>b[1]-a[1]);
   charts.model = new Chart(document.getElementById('modelChart'), {
     type:'doughnut', data:{labels:sorted.map(e=>e[0]),datasets:[{data:sorted.map(e=>e[1]),backgroundColor:MODEL_COLORS.slice(0,sorted.length)}]},
-    options:{responsive:true,plugins:{legend:{position:'bottom',labels:{color:'#8b949e'}}}}
+    options:{responsive:true,maintainAspectRatio:true,aspectRatio:1.3,plugins:{legend:{position:'bottom',labels:{color:'#8b949e'}}}}
   });
 }
 
@@ -417,6 +458,63 @@ function renderSubagents(subs) {
   let rows='';
   sorted.forEach(([n,c])=>{rows+='<tr><td><span class="pill pill-orange">'+esc(n)+'</span></td><td class="num">'+c+'</td></tr>';});
   el.innerHTML='<div class="table-card"><div class="section-title">Subagent Usage</div><table><thead><tr><th>Subagent</th><th class="num">Invocations</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+}
+
+function renderHourly(turns) {
+  dc('hourly');
+  if (!turns.length) { document.getElementById('hourlyTitle').textContent = 'Average Hourly Distribution'; return; }
+  // Compute hourly buckets
+  const tzOff = selectedTz === 'local' ? new Date().getTimezoneOffset() : 0;
+  const tzName = selectedTz === 'local' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'UTC';
+  const hourTurns = new Array(24).fill(0);
+  const hourOutput = new Array(24).fill(0);
+  const daysSet = new Set();
+  turns.forEach(t => {
+    const d = new Date(t.timestamp);
+    if (isNaN(d.getTime())) return;
+    // Apply timezone
+    const adjusted = new Date(d.getTime() - tzOff * 60000);
+    const h = adjusted.getUTCHours();
+    hourTurns[h]++;
+    hourOutput[h] += t.output;
+    daysSet.add(adjusted.toISOString().slice(0,10));
+  });
+  const numDays = Math.max(daysSet.size, 1);
+  const avgTurns = hourTurns.map(v => Math.round(v / numDays * 10) / 10);
+  const avgOutput = hourOutput.map(v => Math.round(v / numDays));
+
+  // Peak hours: Mon-Fri 05:00-11:00 PT = 12:00-17:00 UTC
+  const peakUtcStart = 12, peakUtcEnd = 17;
+  function isPeakHour(h) {
+    // Convert display hour back to UTC (tzOff is in minutes, positive=west)
+    const utcH = selectedTz === 'local' ? (h + Math.floor(tzOff / 60) + 24) % 24 : h;
+    return utcH >= peakUtcStart && utcH <= peakUtcEnd;
+  }
+  const barColors = avgTurns.map((_,h) => isPeakHour(h) ? 'rgba(248,81,73,0.75)' : 'rgba(210,153,34,0.75)');
+
+  const labels = Array.from({length:24}, (_,h) => {
+    const lbl = String(h).padStart(2,'0')+':00';
+    return isPeakHour(h) ? '\u26A1 '+lbl : lbl;
+  });
+
+  document.getElementById('hourlyTitle').textContent = 'Average Hourly Distribution — '+RANGE_LABELS[selectedRange]+' ('+numDays+' days) — '+tzName;
+  // Update tz toggle state
+  document.querySelectorAll('.tz-btn').forEach(b => b.classList.toggle('active', b.textContent.trim().toLowerCase() === selectedTz));
+
+  charts.hourly = new Chart(document.getElementById('hourlyChart'), {
+    type:'bar', data:{labels, datasets:[
+      {label:'Avg Turns',data:avgTurns,backgroundColor:barColors,yAxisID:'y',order:2},
+      {label:'Avg Output Tokens',data:avgOutput,type:'line',borderColor:'#bc8cff',backgroundColor:'rgba(188,140,255,0.2)',pointBackgroundColor:'#bc8cff',pointRadius:3,yAxisID:'y1',tension:0.3,order:1}
+    ]},
+    options:{responsive:true,plugins:{
+      legend:{labels:{color:'#8b949e'}},
+      tooltip:{callbacks:{afterLabel:function(ctx){if(ctx.datasetIndex===0 && isPeakHour(ctx.dataIndex))return 'Peak — Anthropic US hours';return '';}}}
+    },scales:{
+      x:{ticks:{color:'#8b949e',maxRotation:45},grid:{color:'#30363d33'}},
+      y:{position:'left',ticks:{color:'#d29922'},grid:{color:'#30363d33'},title:{display:true,text:'Avg Turns',color:'#d29922'}},
+      y1:{position:'right',ticks:{color:'#bc8cff',callback:v=>fmt(v)},grid:{drawOnChartArea:false},title:{display:true,text:'Avg Output Tokens',color:'#bc8cff'}}
+    }}
+  });
 }
 
 buildFilterBar();

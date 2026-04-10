@@ -2,7 +2,7 @@
   "name": "copilot-usage-dashboard",
   "displayName": "Copilot Usage Dashboard",
   "description": "Live token usage dashboard for GitHub Copilot — prompt, output, and cached tokens with full analytics.",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "pvjagtap",
   "icon": "images/icon.png",
   "license": "MIT",
