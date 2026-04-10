@@ -1,12 +1,20 @@
 # Copilot Usage Dashboard
 
 <p align="center">
-  <img src="images/icon.png" width="128" height="128" alt="Copilot Usage Dashboard">
+  <img src="images/icon.png" width="128" height="128" alt="Copilot Usage Dashboard Logo">
 </p>
 
 <p align="center">
-  <strong>A VS Code extension for tracking GitHub Copilot token usage from local chat session history and live OpenTelemetry data. No external database or server required.</strong>
+  <strong>A self-contained VS Code extension that gives you full visibility into your GitHub Copilot token usage.</strong>
 </p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/VS%20Code-1.85%2B-blue?logo=visualstudiocode" alt="VS Code 1.85+">
+  <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License">
+  <img src="https://img.shields.io/badge/Version-0.1.3-purple" alt="Version">
+</p>
+
+---
 
 ## Features
 
