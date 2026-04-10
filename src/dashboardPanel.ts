@@ -398,7 +398,6 @@ function renderDaily(daily) {
       y:{position:'left',stacked:true,ticks:{color:tc('blue'),callback:v=>fmt(v)},grid:{color:tc('grid')},title:{display:true,text:'Tokens',color:tc('blue')}}
     }}
   });
-  });
 }
 
 function renderModelPie(sessions) {
