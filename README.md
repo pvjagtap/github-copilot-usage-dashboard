@@ -11,7 +11,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/VS%20Code-1.85%2B-blue?logo=visualstudiocode" alt="VS Code 1.85+">
   <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License">
-  <img src="https://img.shields.io/badge/Version-0.1.3-purple" alt="Version">
+  <img src="https://img.shields.io/badge/Version-0.1.4-purple" alt="Version">
 </p>
 
 ---
