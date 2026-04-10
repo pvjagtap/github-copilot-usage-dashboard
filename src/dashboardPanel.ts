@@ -490,7 +490,7 @@ function renderSubagents(subs) {
   const sorted=Object.entries(m).sort((a,b)=>b[1]-a[1]);
   let rows='';
   sorted.forEach(([n,c])=>{rows+='<tr><td><span class="pill pill-orange">'+esc(n)+'</span></td><td class="num">'+c+'</td></tr>';});
-  el.innerHTML='<div class="table-card"><div class="section-title">Subagent Usage</div><table><thead><tr><th>Subagent</th><th class="num">Invocations</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+  el.innerHTML='<div class="chart-card" style="height:100%"><h3>Subagent Usage</h3><table><thead><tr><th>Subagent</th><th class="num">Invocations</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
 }
 
 function renderHourly(turns) {
