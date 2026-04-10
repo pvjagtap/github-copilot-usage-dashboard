@@ -4,7 +4,9 @@
   <img src="images/icon.png" width="128" height="128" alt="Copilot Usage Dashboard">
 </p>
 
-A VS Code extension for tracking GitHub Copilot token usage from local chat session history and live OpenTelemetry data. No external database or server required.
+<p align="center">
+  <strong>A VS Code extension for tracking GitHub Copilot token usage from local chat session history and live OpenTelemetry data. No external database or server required.</strong>
+</p>
 
 ## Features
 
