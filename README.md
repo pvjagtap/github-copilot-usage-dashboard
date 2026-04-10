@@ -32,13 +32,6 @@
 
 ## Install
 
-From [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=pvjagtap.copilot-usage-dashboard):
-
-1. Open VS Code
-2. Go to Extensions (Ctrl+Shift+X)
-3. Search for "Copilot Usage Dashboard"
-4. Click Install
-
 From source:
 
 ```

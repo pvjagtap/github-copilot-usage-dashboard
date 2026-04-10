@@ -3,16 +3,16 @@
   "displayName": "Copilot Usage Dashboard",
   "description": "Live token usage dashboard for GitHub Copilot — prompt, output, and cached tokens with full analytics.",
   "version": "0.1.6",
-  "publisher": "pvjagtap",
+  "publisher": "MAGNA-OpenSource",
   "icon": "images/icon.png",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/pvjagtap/github-copilot-usage-dashboard"
+    "url": "https://github.com/MAGNA-OpenSource/github-copilot-usage-dashboard"
   },
-  "homepage": "https://github.com/pvjagtap/github-copilot-usage-dashboard#readme",
+  "homepage": "https://github.com/MAGNA-OpenSource/github-copilot-usage-dashboard#readme",
   "bugs": {
-    "url": "https://github.com/pvjagtap/github-copilot-usage-dashboard/issues"
+    "url": "https://github.com/MAGNA-OpenSource/github-copilot-usage-dashboard/issues"
   },
   "keywords": [
     "copilot",
