@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-04-10
+
 ### Changed
 - Rebranded repository to MAGNA-OpenSource
 - Added `repo.config.json` and `apply-repo-config.js` for repo-independent configuration
@@ -60,7 +62,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Status bar with session count and token totals
 - Multi-root workspace support
 
-[Unreleased]: https://github.com/MAGNA-OpenSource/github-copilot-usage-dashboard/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/MAGNA-OpenSource/github-copilot-usage-dashboard/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/MAGNA-OpenSource/github-copilot-usage-dashboard/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/MAGNA-OpenSource/github-copilot-usage-dashboard/compare/v0.1.4...v0.1.6
 [0.1.4]: https://github.com/MAGNA-OpenSource/github-copilot-usage-dashboard/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/MAGNA-OpenSource/github-copilot-usage-dashboard/compare/v0.1.2...v0.1.3
