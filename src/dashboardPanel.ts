@@ -59,7 +59,7 @@ export class DashboardPanel {
 
   update(data: DashboardData): void {
     if (this.disposed) { return; }
-    this.panel.webview.html = this.buildHtml(data);
+    this.panel.webview.postMessage({ type: 'updateData', data });
   }
 
   private buildHtml(data: DashboardData): string {
@@ -209,7 +209,7 @@ td { padding: 8px; border-bottom: 1px solid var(--border); font-size: 12px; }
 </div>
 
 <script>
-const DATA = ${jsonData};
+let DATA = ${jsonData};
 const MODEL_COLORS = ['#58a6ff','#3fb950','#bc8cff','#d29922','#f85149','#79c0ff','#f778ba','#a5d6ff'];
 const RANGE_LABELS = {'7d':'Last 7 Days','30d':'Last 30 Days','90d':'Last 90 Days','tw':'This Week','tm':'This Month','pm':'Prev Month','all':'All Time'};
 const KNOWN_MULT = {'claude-opus':3,'claude-sonnet':1,'claude-haiku':0.25,'gpt-5':1,'gpt-4.1':1,'gpt-4o-mini':0.25,'gpt-4.1-mini':0.25,'o3':3,'o3-mini':0.25,'o4-mini':0.25,'gemini-2.5-pro':3,'gemini-2.0-flash':0.25};
@@ -311,7 +311,7 @@ function updateRefreshButtons() {
 }
 function setTz(btn, tz) { selectedTz=tz; btn.closest('.tz-toggle').querySelectorAll('.tz-btn').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); _saveState(); render(); }
 function setRefresh(btn, secs) { selectedRefresh=secs; btn.closest('.refresh-btns').querySelectorAll('.range-btn').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); _saveState(); vscode.postMessage({type:'refreshRate',intervalMs:secs*1000}); }
-function manualRefresh(btn) { btn.classList.add('spinning'); vscode.postMessage({type:'manualRefresh'}); setTimeout(()=>btn.classList.remove('spinning'),800); }
+function manualRefresh(btn) { vscode.postMessage({type:'manualRefresh'}); }
 
 function render() {
   const bounds = getRangeBounds(selectedRange);
@@ -553,6 +553,19 @@ function renderHourly(turns) {
 
 buildFilterBar();
 render();
+
+window.addEventListener('message', e => {
+  const msg = e.data;
+  if (msg.type === 'updateData' && msg.data) {
+    DATA = msg.data;
+    // Re-check model set: keep selected, add new models
+    const newModels = new Set(DATA.allModels);
+    selectedModels.forEach(m => { if (!newModels.has(m)) selectedModels.delete(m); });
+    DATA.allModels.forEach(m => { if (!selectedModels.has(m)) selectedModels.add(m); });
+    buildFilterBar();
+    render();
+  }
+});
 <\/script>
 </body>
 </html>`;
