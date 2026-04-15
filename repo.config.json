@@ -1,8 +1,8 @@
 {
-  "owner": "MAGNA-OpenSource",
+  "owner": "pvjagtap",
   "repo": "github-copilot-usage-dashboard",
   "publisher": "pvjagtap",
-  "copyrightHolder": "MAGNA-OpenSource",
+  "copyrightHolder": "pvjagtap",
   "displayName": "Copilot Usage Dashboard",
   "extensionName": "copilot-usage-dashboard"
 }
