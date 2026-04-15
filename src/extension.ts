@@ -38,6 +38,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // Start OTel receiver
   receiver = new OTelReceiver();
+  receiver.log = (msg: string) => output.appendLine(msg);
   let port: number;
   try {
     port = await receiver.start(OTEL_PORT);
@@ -60,14 +61,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const config = vscode.workspace.getConfiguration("github.copilot.chat.otel");
       const currentEndpoint = config.get<string>("otlpEndpoint") ?? "";
       const currentEnabled = config.get<boolean>("enabled");
+      const currentOutfile = config.get<string>("outfile") ?? "";
+
+      // outfile overrides exporterType to "file", which prevents HTTP export
+      const outfileConflict = currentOutfile.length > 0;
 
       const needsUpdate = currentEnabled !== true
-        || currentEndpoint !== expectedEndpoint;
+        || currentEndpoint !== expectedEndpoint
+        || outfileConflict;
 
       if (needsUpdate) {
         await config.update("enabled", true, vscode.ConfigurationTarget.Global);
         await config.update("exporterType", "otlp-http", vscode.ConfigurationTarget.Global);
         await config.update("otlpEndpoint", expectedEndpoint, vscode.ConfigurationTarget.Global);
+        // Remove outfile — it overrides exporterType to "file".
+        // The extension now relays /v1/logs to the same JSONL for hooks.
+        if (outfileConflict) {
+          await config.update("outfile", undefined, vscode.ConfigurationTarget.Global);
+          output.appendLine(`Removed outfile setting (was: ${currentOutfile}) — relay handles JSONL output`);
+        }
         output.appendLine(`Updated OTel settings: endpoint=${expectedEndpoint}`);
         vscode.window.showInformationMessage(
           `Copilot Usage: OTel receiver on port ${port}. Reload VS Code once for Copilot to start exporting.`,

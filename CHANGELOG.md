@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.9] - 2026-04-15
+
+### Added
+- OTel receiver diagnostic logging via Output channel
+- Protobuf content-type detection with graceful fallback
+- Automatic `outfile` conflict resolution — removes outfile setting that overrides HTTP export
+
+### Fixed
+- OTel settings now correctly detect and clear `outfile` conflicts that prevent live telemetry
+
 ## [0.1.7] - 2026-04-10
 
 ### Changed
