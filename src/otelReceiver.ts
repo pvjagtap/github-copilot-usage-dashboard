@@ -167,6 +167,8 @@ function parseTraceGroups(payload: any): OTelRequest[] {
  * In-memory OTel store and HTTP receiver for Copilot telemetry.
  * Runs a lightweight HTTP server on localhost that accepts OTLP JSON.
  */
+type LogFn = (msg: string) => void;
+
 export class OTelReceiver {
   private requests: OTelRequest[] = [];
   private metricState = new Map<string, number>();
@@ -174,8 +176,11 @@ export class OTelReceiver {
   private server: http.Server | null = null;
   private listeners: StatsListener[] = [];
   private _port = 0;
+  private _log: LogFn = () => {};
 
   get port(): number { return this._port; }
+
+  set log(fn: LogFn) { this._log = fn; }
 
   onStats(listener: StatsListener): void {
     this.listeners.push(listener);
@@ -287,6 +292,9 @@ export class OTelReceiver {
   async start(port = 14318): Promise<number> {
     return new Promise((resolve, reject) => {
       this.server = http.createServer(async (req, res) => {
+        const contentType = req.headers["content-type"] ?? "";
+        this._log(`OTel HTTP: ${req.method} ${req.url} content-type=${contentType}`);
+
         if (req.method === "GET" && req.url === "/healthz") {
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ ok: true }));
@@ -301,12 +309,27 @@ export class OTelReceiver {
 
         try {
           const body = await this.readChunkedBody(req);
+          this._log(`OTel body: ${body.length} bytes, url=${req.url}`);
           let payload: any = {};
 
           if (body.length > 0) {
+            // Try JSON first, then attempt protobuf-like detection
+            const isProtobuf = contentType.includes("protobuf") || contentType.includes("proto");
+            if (isProtobuf) {
+              this._log(`OTel: received protobuf content-type (${contentType}), cannot parse — Copilot is sending protobuf instead of JSON`);
+              // Accept the request so Copilot keeps sending, but log the issue
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ ok: true, note: "protobuf not supported, use JSON" }));
+              return;
+            }
             try {
               payload = JSON.parse(body.toString("utf-8"));
             } catch {
+              // Check if it looks like protobuf (binary data)
+              const firstByte = body[0];
+              if (firstByte !== 0x7b /* '{' */) {
+                this._log(`OTel: body is not JSON (first byte=0x${firstByte?.toString(16)}), likely protobuf binary`);
+              }
               res.writeHead(400, { "Content-Type": "application/json" });
               res.end(JSON.stringify({ error: "invalid JSON" }));
               return;
@@ -318,6 +341,7 @@ export class OTelReceiver {
             // Deduplicate by requestId
             const existing = new Set(this.requests.map(r => r.requestId));
             const newReqs = parsed.filter(r => !existing.has(r.requestId));
+            this._log(`OTel traces: parsed=${parsed.length}, new=${newReqs.length}`);
             this.requests.push(...newReqs);
             this.notify();
             res.writeHead(200, { "Content-Type": "application/json" });
@@ -334,6 +358,7 @@ export class OTelReceiver {
           }
 
           if (req.url === "/v1/logs") {
+            this._log(`OTel logs: accepted`);
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ ok: true }));
             return;
