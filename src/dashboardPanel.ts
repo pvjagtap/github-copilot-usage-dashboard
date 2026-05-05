@@ -203,7 +203,7 @@ td { padding: 8px; border-bottom: 1px solid var(--border); font-size: 12px; }
 <div id="sessions-section"></div>
 <div id="model-section"></div>
 <div class="chart-card" style="margin-bottom:16px"><h3>Daily Token Usage</h3><canvas id="dailyChart"></canvas></div>
-<div class="chart-card" style="margin-bottom:16px"><div style="display:flex;align-items:center"><h3 style="flex:1" id="hourlyTitle">Average Hourly Distribution</h3><div class="tz-toggle"><button class="tz-btn" onclick="setTz(this,'local')">Local</button><button class="tz-btn active" onclick="setTz(this,'utc')">UTC</button></div></div><canvas id="hourlyChart"></canvas></div>
+<div class="chart-card" style="margin-bottom:16px"><div style="display:flex;align-items:center"><h3 style="flex:1" id="hourlyTitle">Average Hourly Distribution</h3><div class="tz-toggle"><button class="tz-btn active" onclick="setTz(this,'local')">Local</button><button class="tz-btn" onclick="setTz(this,'utc')">UTC</button></div></div><canvas id="hourlyChart"></canvas></div>
 <div class="note" style="margin-top:16px;text-align:center;">
   Token counts come from VS Code chatSessions files. Live OTel adds request, prompt, output, and cache-read token visibility.
 </div>
@@ -219,7 +219,7 @@ const _saved = vscode.getState() || {};
 let selectedRange = _saved.selectedRange || '30d';
 let selectedModels = _saved.selectedModels ? new Set(_saved.selectedModels.filter(m => DATA.allModels.includes(m))) : new Set(DATA.allModels);
 let selectedRefresh = typeof _saved.selectedRefresh === 'number' ? _saved.selectedRefresh : 120;
-let selectedTz = _saved.selectedTz || 'utc';
+let selectedTz = _saved.selectedTz || 'local';
 let charts = {};
 function _saveState() { vscode.setState({ selectedRange, selectedRefresh, selectedModels: Array.from(selectedModels), selectedTz }); }
 
@@ -325,8 +325,8 @@ function render() {
   const t = {
     sessions: sessions.length,
     turns: sessions.reduce((s,x)=>s+x.turns,0),
-    prompt: sessions.reduce((s,x)=>s+x.prompt,0),
-    output: sessions.reduce((s,x)=>s+x.output,0),
+    prompt: sessions.reduce((s,x)=>s+(x.actualPrompt||x.prompt),0),
+    output: sessions.reduce((s,x)=>s+(x.actualOutput||x.output),0),
     tools: tools.reduce((s,x)=>s+x.count,0),
     subs: subs.reduce((s,x)=>s+x.count,0),
     premium: sessions.reduce((s,x)=>s+getMult(x.modelName,x.multiplier)*x.turns,0),
@@ -338,7 +338,7 @@ function render() {
   document.getElementById('stats-row').innerHTML = [
     {l:'Sessions',v:t.sessions,s:rl.toLowerCase()},
     {l:'Turns',v:t.turns,s:rl},
-    {l:'Prompt Tokens',v:fmt(t.prompt),s:'input tokens'},
+    {l:'Prompt Tokens',v:fmt(t.prompt),s:'actual API usage'},
     {l:'Output Tokens',v:fmt(t.output),s:'generated tokens'},
     {l:'Tool Calls',v:fmt(t.tools),s:'all tool invocations'},
     {l:'Subagent Calls',v:t.subs,s:'runSubagent only'},
@@ -364,7 +364,7 @@ function renderOtel(live) {
     el.innerHTML = '<div class="table-card"><div class="section-head"><div class="section-title">Live OpenTelemetry</div><div class="section-subtitle">Waiting for Copilot telemetry</div></div><div class="empty-panel">The OTel receiver is active. Send a Copilot chat message and data will appear here.</div></div>';
     return;
   }
-  const ls = live.lastSeen ? live.lastSeen.slice(0,19).replace('T',' ') : '';
+  const ls = live.lastSeen ? new Date(live.lastSeen).toLocaleString('en-CA', {hour12: false}).replace(',','') : '';
   const csub = live.metricCached ? 'using metric deltas' : 'trace fallback only';
   let rows = '';
   (live.byModel||[]).forEach(m => {
@@ -403,7 +403,7 @@ function renderDaily(daily) {
 function renderModelPie(sessions) {
   dc('model');
   const m={};
-  sessions.forEach(s=>{m[s.model]=(m[s.model]||0)+s.prompt+s.output;});
+  sessions.forEach(s=>{m[s.model]=(m[s.model]||0)+(s.actualPrompt||s.prompt)+(s.actualOutput||s.output);});
   const sorted=Object.entries(m).sort((a,b)=>b[1]-a[1]);
   charts.model = new Chart(document.getElementById('modelChart'), {
     type:'doughnut', data:{labels:sorted.map(e=>e[0]),datasets:[{data:sorted.map(e=>e[1]),backgroundColor:MODEL_COLORS.slice(0,sorted.length)}]},
@@ -414,7 +414,7 @@ function renderModelPie(sessions) {
 function renderProjectBar(sessions) {
   dc('project');
   const pm={},om={};
-  sessions.forEach(s=>{pm[s.project]=(pm[s.project]||0)+s.prompt;om[s.project]=(om[s.project]||0)+s.output;});
+  sessions.forEach(s=>{pm[s.project]=(pm[s.project]||0)+(s.actualPrompt||s.prompt);om[s.project]=(om[s.project]||0)+(s.actualOutput||s.output);});
   const sorted=Object.entries(pm).map(([k,v])=>[k,v+(om[k]||0)]).sort((a,b)=>b[1]-a[1]).slice(0,10);
   const labels=sorted.map(e=>e[0]);
   charts.project = new Chart(document.getElementById('projectChart'), {
@@ -458,7 +458,7 @@ function renderSessions(sessions, subs) {
     const fl=(s.sourcePaths||[]).map((p,i)=>'<span class="file-link" data-path="'+esc(p)+'" title="'+esc(p)+'">log '+(i+1)+'</span>').join('')
       +(s.transcriptPaths||[]).map((p,i)=>'<span class="file-link" data-path="'+esc(p)+'" title="'+esc(p)+'">transcript '+(i+1)+'</span>').join('');
     const flDiv=fl?'<div class="file-links">'+fl+'</div>':'';
-    rows+='<tr><td style="font-family:monospace;font-size:11px">'+esc(s.sessionShort)+'...</td><td>'+esc(s.project)+'</td><td>'+sum+'</td><td style="font-size:11px">'+esc(s.last)+'</td><td class="num">'+s.durationMin+'m</td><td><span class="model-tag '+mc(s.modelName)+'">'+esc(s.modelName)+'</span>'+mbadge(mult)+'</td><td class="num">'+s.turns+'</td><td class="num">'+fmt(s.prompt)+'</td><td class="num">'+fmt(s.output)+'</td><td class="num">'+fmt(s.toolCalls)+'</td><td class="num">'+(s.subagents||'')+(sd?' '+sd:'')+'</td><td>'+flDiv+'</td></tr>';
+    rows+='<tr><td style="font-family:monospace;font-size:11px">'+esc(s.sessionShort)+'...</td><td>'+esc(s.project)+'</td><td>'+sum+'</td><td style="font-size:11px">'+esc(s.last)+'</td><td class="num">'+s.durationMin+'m</td><td><span class="model-tag '+mc(s.modelName)+'">'+esc(s.modelName)+'</span>'+mbadge(mult)+'</td><td class="num">'+s.turns+'</td><td class="num">'+fmt(s.actualPrompt||s.prompt)+'</td><td class="num">'+fmt(s.actualOutput||s.output)+'</td><td class="num">'+fmt(s.toolCalls)+'</td><td class="num">'+(s.subagents||'')+(sd?' '+sd:'')+'</td><td>'+flDiv+'</td></tr>';
   });
   el.innerHTML='<div class="table-card"><div class="section-title">All Sessions &mdash; '+sessions.length+' shown</div><div class="sessions-scroll"><table><thead><tr><th>Session</th><th>Project</th><th>Summary</th><th>Last Active</th><th class="num">Duration</th><th>Model</th><th class="num">Turns</th><th class="num">Prompt</th><th class="num">Output</th><th class="num">Tools</th><th class="num">Subagents</th><th>Files</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
   el.querySelectorAll('.file-link[data-path]').forEach(link => {
@@ -472,7 +472,7 @@ function renderModelTable(sessions) {
   sessions.forEach(s=>{
     const k=s.modelName;
     if(!m[k])m[k]={model:k,mult:getMult(k,s.multiplier),sessions:new Set(),turns:0,prompt:0,output:0,tools:0,subs:0};
-    m[k].sessions.add(s.sessionId);m[k].turns+=s.turns;m[k].prompt+=s.prompt;m[k].output+=s.output;m[k].tools+=s.toolCalls;m[k].subs+=s.subagents;
+    m[k].sessions.add(s.sessionId);m[k].turns+=s.turns;m[k].prompt+=(s.actualPrompt||s.prompt);m[k].output+=(s.actualOutput||s.output);m[k].tools+=s.toolCalls;m[k].subs+=s.subagents;
   });
   const sorted=Object.values(m).sort((a,b)=>(b.prompt+b.output)-(a.prompt+a.output));
   let rows='';

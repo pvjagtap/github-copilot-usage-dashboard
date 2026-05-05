@@ -15,7 +15,7 @@ let lastScan: ScanResult | undefined;
 let output: vscode.OutputChannel;
 
 function buildData(): DashboardData {
-  const scan = lastScan ?? { sessions: [], turns: [], toolCalls: [], subagents: [], stats: { sourceFiles: 0, canonicalSessions: 0, mirroredSessions: 0, mirrorCopiesPruned: 0, turnsStored: 0, toolCallsStored: 0, promptPreviews: 0, transcriptsFound: 0 } };
+  const scan = lastScan ?? { sessions: [], turns: [], toolCalls: [], subagents: [], stats: { sourceFiles: 0, canonicalSessions: 0, mirroredSessions: 0, mirrorCopiesPruned: 0, turnsStored: 0, toolCallsStored: 0, promptPreviews: 0, transcriptsFound: 0, debugLogSessions: 0 } };
   const live = receiver?.getStats() ?? null;
   return buildDashboardData(scan, live);
 }

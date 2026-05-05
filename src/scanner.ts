@@ -30,12 +30,17 @@ export interface Session {
   location: string;
   totalPromptTokens: number;
   totalOutputTokens: number;
+  /** Actual total from debug-logs (sum of all LLM API calls across all turns). 0 if no debug-log. */
+  debugTotalPrompt: number;
+  /** Actual total output from debug-logs. 0 if no debug-log. */
+  debugTotalOutput: number;
   turnCount: number;
   toolCallRounds: number;
   toolCallResults: number;
   subagentCalls: number;
   sourcePaths: string[];
   transcriptPaths: string[];
+  debugLogPath: string;
 }
 
 export interface Turn {
@@ -45,6 +50,10 @@ export interface Turn {
   modelFamily: string;
   promptTokens: number;
   outputTokens: number;
+  /** Actual cumulative input tokens from debug-logs (sum of all LLM API calls in this turn). */
+  debugPromptTokens: number;
+  /** Actual cumulative output tokens from debug-logs. */
+  debugOutputTokens: number;
   toolCallRounds: number;
   toolCallResults: number;
   workspaceName: string;
@@ -83,6 +92,7 @@ export interface ScanStats {
   toolCallsStored: number;
   promptPreviews: number;
   transcriptsFound: number;
+  debugLogSessions: number;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────
@@ -215,6 +225,8 @@ function parseSessionFile(filePath: string, wsHash: string, projectName: string)
               modelFamily,
               promptTokens: meta.promptTokens ?? 0,
               outputTokens: meta.outputTokens ?? 0,
+              debugPromptTokens: 0,
+              debugOutputTokens: 0,
               toolCallRounds: Array.isArray(meta.toolCallRounds) ? meta.toolCallRounds.length : 0,
               toolCallResults: Array.isArray(meta.toolCallResults) ? meta.toolCallResults.length : 0,
               workspaceName: wName,
@@ -255,6 +267,8 @@ function parseSessionFile(filePath: string, wsHash: string, projectName: string)
                 modelFamily,
                 promptTokens: 0,
                 outputTokens: 0,
+                debugPromptTokens: 0,
+                debugOutputTokens: 0,
                 toolCallRounds: 0,
                 toolCallResults: 0,
                 workspaceName: extractWorkspaceName(undefined, wsHash),
@@ -303,6 +317,8 @@ function parseSessionFile(filePath: string, wsHash: string, projectName: string)
         modelFamily,
         promptTokens: meta.promptTokens ?? 0,
         outputTokens: meta.outputTokens ?? 0,
+        debugPromptTokens: 0,
+        debugOutputTokens: 0,
         toolCallRounds: Array.isArray(meta.toolCallRounds) ? meta.toolCallRounds.length : 0,
         toolCallResults: Array.isArray(meta.toolCallResults) ? meta.toolCallResults.length : 0,
         workspaceName: wName,
@@ -385,12 +401,15 @@ function parseSessionFile(filePath: string, wsHash: string, projectName: string)
       location,
       totalPromptTokens: totalPrompt,
       totalOutputTokens: totalOutput,
+      debugTotalPrompt: 0,
+      debugTotalOutput: 0,
       turnCount: turns.length,
       toolCallRounds: totalToolRounds,
       toolCallResults: totalToolResults,
       subagentCalls: subagentCallCount,
       sourcePaths: [filePath],
       transcriptPaths: [],
+      debugLogPath: "",
     },
     turns,
     toolCalls,
@@ -520,10 +539,126 @@ function discoverTranscriptFiles(wsRoot: string): Map<string, string[]> {
   return map;
 }
 
+// ─── Debug-Log Scanner ────────────────────────────────────────
+
+interface DebugLogTurnTokens {
+  turnIndex: number;
+  promptTotal: number;
+  outputTotal: number;
+  llmCalls: number;
+}
+
+interface DebugLogData {
+  sessionId: string;
+  filePath: string;
+  turns: DebugLogTurnTokens[];
+  totalPrompt: number;
+  totalOutput: number;
+  totalLlmCalls: number;
+}
+
+/**
+ * Parse a debug-log main.jsonl to extract per-turn and total LLM token usage.
+ * Debug-logs record every individual LLM API call, giving accurate cumulative totals.
+ */
+function parseDebugLog(filePath: string): DebugLogData | null {
+  let content: string;
+  try { content = fs.readFileSync(filePath, "utf-8"); } catch { return null; }
+
+  const lines = content.split("\n").filter(l => l.trim());
+  if (lines.length === 0) { return null; }
+
+  let sessionId = "";
+  let currentTurn = -1;
+  const turnMap = new Map<number, DebugLogTurnTokens>();
+  let totalPrompt = 0;
+  let totalOutput = 0;
+  let totalLlmCalls = 0;
+
+  for (const line of lines) {
+    let entry: any;
+    try { entry = JSON.parse(line); } catch { continue; }
+
+    const type = entry.type;
+    if (type === "session_start") {
+      sessionId = entry.sid ?? "";
+    } else if (type === "turn_start") {
+      const tid = entry.attrs?.turnId;
+      currentTurn = tid !== undefined ? parseInt(String(tid), 10) : currentTurn + 1;
+      if (!turnMap.has(currentTurn)) {
+        turnMap.set(currentTurn, { turnIndex: currentTurn, promptTotal: 0, outputTotal: 0, llmCalls: 0 });
+      }
+    } else if (type === "turn_end") {
+      // Keep currentTurn for next turn_start to increment
+    } else if (type === "llm_request") {
+      const attrs = entry.attrs ?? {};
+      const inp = Number(attrs.inputTokens ?? 0);
+      const out = Number(attrs.outputTokens ?? 0);
+      totalPrompt += inp;
+      totalOutput += out;
+      totalLlmCalls++;
+
+      if (currentTurn >= 0) {
+        if (!turnMap.has(currentTurn)) {
+          turnMap.set(currentTurn, { turnIndex: currentTurn, promptTotal: 0, outputTotal: 0, llmCalls: 0 });
+        }
+        const t = turnMap.get(currentTurn)!;
+        t.promptTotal += inp;
+        t.outputTotal += out;
+        t.llmCalls++;
+      }
+    }
+  }
+
+  if (!sessionId || totalLlmCalls === 0) { return null; }
+
+  return {
+    sessionId,
+    filePath,
+    turns: Array.from(turnMap.values()).sort((a, b) => a.turnIndex - b.turnIndex),
+    totalPrompt,
+    totalOutput,
+    totalLlmCalls,
+  };
+}
+
+/**
+ * Discover all debug-log sessions across workspace storage.
+ * Returns a map of sessionId -> DebugLogData.
+ */
+function discoverDebugLogs(wsRoot: string): Map<string, DebugLogData> {
+  const map = new Map<string, DebugLogData>();
+  if (!fs.existsSync(wsRoot)) { return map; }
+
+  let dirs: string[];
+  try { dirs = fs.readdirSync(wsRoot); } catch { return map; }
+
+  for (const dirName of dirs.sort()) {
+    const dlDir = path.join(wsRoot, dirName, "GitHub.copilot-chat", "debug-logs");
+    try { if (!fs.statSync(dlDir).isDirectory()) { continue; } } catch { continue; }
+
+    let sessionDirs: string[];
+    try { sessionDirs = fs.readdirSync(dlDir); } catch { continue; }
+
+    for (const sid of sessionDirs) {
+      const mainJsonl = path.join(dlDir, sid, "main.jsonl");
+      try { if (!fs.statSync(mainJsonl).isFile()) { continue; } } catch { continue; }
+
+      const data = parseDebugLog(mainJsonl);
+      if (data) {
+        map.set(data.sessionId, data);
+      }
+    }
+  }
+
+  return map;
+}
+
 export function scanWorkspaceStorage(): ScanResult {
   const wsRoot = getWorkspaceStoragePath();
   const sessionFiles = discoverSessionFiles(wsRoot);
   const transcriptMap = discoverTranscriptFiles(wsRoot);
+  const debugLogMap = discoverDebugLogs(wsRoot);
 
   // Parse all session files
   const bundlesBySession = new Map<string, SessionBundle[]>();
@@ -583,6 +718,24 @@ export function scanWorkspaceStorage(): ScanResult {
     if (s.promptPreview) { promptPreviews++; }
   }
 
+  // Enrich sessions and turns with debug-log token data
+  for (const s of sessions) {
+    const dbg = debugLogMap.get(s.sessionId);
+    if (!dbg) { continue; }
+    s.debugTotalPrompt = dbg.totalPrompt;
+    s.debugTotalOutput = dbg.totalOutput;
+    s.debugLogPath = dbg.filePath;
+
+    // Enrich individual turns
+    for (const dt of dbg.turns) {
+      const matchingTurns = turns.filter(t => t.sessionId === s.sessionId && t.turnIndex === dt.turnIndex);
+      for (const t of matchingTurns) {
+        t.debugPromptTokens = dt.promptTotal;
+        t.debugOutputTokens = dt.outputTotal;
+      }
+    }
+  }
+
   // Sort sessions by last timestamp desc
   sessions.sort((a, b) => (b.lastTimestamp || "").localeCompare(a.lastTimestamp || ""));
 
@@ -602,6 +755,7 @@ export function scanWorkspaceStorage(): ScanResult {
       toolCallsStored: toolCalls.length,
       promptPreviews,
       transcriptsFound,
+      debugLogSessions: debugLogMap.size,
     },
   };
 }

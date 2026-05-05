@@ -58,6 +58,10 @@ export interface SessionView {
   turns: number;
   prompt: number;
   output: number;
+  /** Actual cumulative prompt from debug-logs (all LLM API calls). 0 if no debug data. */
+  actualPrompt: number;
+  /** Actual cumulative output from debug-logs. 0 if no debug data. */
+  actualOutput: number;
   toolRounds: number;
   toolCalls: number;
   subagents: number;
@@ -105,14 +109,17 @@ function computeDaily(turns: Turn[]): DailyRow[] {
     const day = t.timestamp.slice(0, 10);
     const model = t.modelFamily || "unknown";
     const key = `${day}:${model}`;
+    // Prefer debug-log actual tokens over chatSession snapshot
+    const prompt = t.debugPromptTokens || t.promptTokens;
+    const output = t.debugOutputTokens || t.outputTokens;
     const existing = map.get(key);
     if (existing) {
-      existing.prompt += t.promptTokens;
-      existing.output += t.outputTokens;
+      existing.prompt += prompt;
+      existing.output += output;
       existing.toolRounds += t.toolCallRounds;
       existing.turns++;
     } else {
-      map.set(key, { day, model, prompt: t.promptTokens, output: t.outputTokens, toolRounds: t.toolCallRounds, turns: 1 });
+      map.set(key, { day, model, prompt, output, toolRounds: t.toolCallRounds, turns: 1 });
     }
   }
   return Array.from(map.values()).sort((a, b) => a.day.localeCompare(b.day) || a.model.localeCompare(b.model));
@@ -176,6 +183,8 @@ function computeSessionViews(sessions: Session[], toolCalls: ToolCall[]): Sessio
       turns: s.turnCount,
       prompt: s.totalPromptTokens,
       output: s.totalOutputTokens,
+      actualPrompt: s.debugTotalPrompt,
+      actualOutput: s.debugTotalOutput,
       toolRounds: s.toolCallRounds,
       toolCalls: toolCountMap.get(s.sessionId) ?? 0,
       subagents: s.subagentCalls,
@@ -189,7 +198,9 @@ function computeAllModels(turns: Turn[]): string[] {
   const map = new Map<string, number>();
   for (const t of turns) {
     const m = t.modelFamily || "unknown";
-    map.set(m, (map.get(m) ?? 0) + t.promptTokens + t.outputTokens);
+    const prompt = t.debugPromptTokens || t.promptTokens;
+    const output = t.debugOutputTokens || t.outputTokens;
+    map.set(m, (map.get(m) ?? 0) + prompt + output);
   }
   return Array.from(map.entries())
     .sort((a, b) => b[1] - a[1])
@@ -237,8 +248,8 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
       sessionId: t.sessionId,
       timestamp: t.timestamp,
       model: t.modelFamily || 'unknown',
-      prompt: t.promptTokens,
-      output: t.outputTokens,
+      prompt: t.debugPromptTokens || t.promptTokens,
+      output: t.debugOutputTokens || t.outputTokens,
     }));
 
   return {
@@ -250,6 +261,6 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
     turnsAll,
     liveOtel,
     scanStats: scan.stats,
-    generatedAt: new Date().toISOString().slice(0, 19).replace("T", " "),
+    generatedAt: new Date().toLocaleString('en-CA', { hour12: false, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }).replace(',', ''),
   };
 }
