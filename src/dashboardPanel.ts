@@ -196,8 +196,8 @@ td { padding: 8px; border-bottom: 1px solid var(--border); font-size: 12px; }
 <div id="live-otel-section"></div>
 <div class="charts-grid" id="charts-grid">
   <div class="chart-card"><h3>By Model</h3><canvas id="modelChart"></canvas></div>
-  <div class="chart-card"><h3>Top Projects by Tokens</h3><canvas id="projectChart"></canvas></div>
-  <div class="chart-card"><h3>Top Tools</h3><canvas id="toolChart"></canvas></div>
+  <div class="chart-card"><h3>All Projects by Tokens</h3><div style="overflow-y:auto" id="projectChartWrap"><canvas id="projectChart"></canvas></div></div>
+  <div class="chart-card"><h3>All Tools</h3><div style="overflow-y:auto" id="toolChartWrap"><canvas id="toolChart"></canvas></div></div>
   <div id="subagent-section"></div>
 </div>
 <div id="sessions-section"></div>
@@ -415,14 +415,17 @@ function renderProjectBar(sessions) {
   dc('project');
   const pm={},om={};
   sessions.forEach(s=>{pm[s.project]=(pm[s.project]||0)+(s.actualPrompt||s.prompt);om[s.project]=(om[s.project]||0)+(s.actualOutput||s.output);});
-  const sorted=Object.entries(pm).map(([k,v])=>[k,v+(om[k]||0)]).sort((a,b)=>b[1]-a[1]).slice(0,10);
+  const sorted=Object.entries(pm).map(([k,v])=>[k,v+(om[k]||0)]).sort((a,b)=>b[1]-a[1]);
   const labels=sorted.map(e=>e[0]);
+  const pH=Math.max(300, sorted.length*28);
+  const wrap=document.getElementById('projectChartWrap');
+  if(wrap){wrap.style.maxHeight='500px';wrap.querySelector('canvas').style.height=pH+'px';wrap.querySelector('canvas').style.width='100%';}
   charts.project = new Chart(document.getElementById('projectChart'), {
     type:'bar', data:{labels, datasets:[
       {label:'Prompt',data:labels.map(l=>pm[l]||0),backgroundColor:tc('chart-bar1')},
       {label:'Output',data:labels.map(l=>om[l]||0),backgroundColor:tc('chart-bar2')}
     ]},
-    options:{indexAxis:'y',responsive:true,plugins:{legend:{labels:{color:tc('muted')}}},scales:{
+    options:{indexAxis:'y',responsive:false,maintainAspectRatio:false,plugins:{legend:{labels:{color:tc('muted')}}},scales:{
       x:{stacked:true,ticks:{color:tc('muted'),callback:v=>fmt(v)},grid:{color:tc('grid')}},
       y:{stacked:true,ticks:{color:tc('muted'),font:{size:10}},grid:{color:tc('grid')}}
     }}
@@ -433,10 +436,13 @@ function renderToolBar(tools) {
   dc('tool');
   const m={};
   tools.forEach(t=>{m[t.toolName]=(m[t.toolName]||0)+t.count;});
-  const sorted=Object.entries(m).sort((a,b)=>b[1]-a[1]).slice(0,10);
+  const sorted=Object.entries(m).sort((a,b)=>b[1]-a[1]);
+  const tH=Math.max(300, sorted.length*28);
+  const tWrap=document.getElementById('toolChartWrap');
+  if(tWrap){tWrap.style.maxHeight='500px';tWrap.querySelector('canvas').style.height=tH+'px';tWrap.querySelector('canvas').style.width='100%';}
   charts.tool = new Chart(document.getElementById('toolChart'), {
     type:'bar', data:{labels:sorted.map(e=>e[0]),datasets:[{label:'Calls',data:sorted.map(e=>e[1]),backgroundColor:tc('chart-bar1')}]},
-    options:{indexAxis:'y',responsive:true,plugins:{legend:{display:false}},scales:{
+    options:{indexAxis:'y',responsive:false,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{
       x:{ticks:{color:tc('muted')},grid:{color:tc('grid')}},
       y:{ticks:{color:tc('muted'),font:{size:10}},grid:{color:tc('grid')}}
     }}
