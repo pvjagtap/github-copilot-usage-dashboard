@@ -546,6 +546,8 @@ interface DebugLogTurnTokens {
   promptTotal: number;
   outputTotal: number;
   llmCalls: number;
+  /** Epoch ms timestamp from turn_start event */
+  timestamp: number;
 }
 
 interface DebugLogData {
@@ -586,7 +588,7 @@ function parseDebugLog(filePath: string): DebugLogData | null {
       const tid = entry.attrs?.turnId;
       currentTurn = tid !== undefined ? parseInt(String(tid), 10) : currentTurn + 1;
       if (!turnMap.has(currentTurn)) {
-        turnMap.set(currentTurn, { turnIndex: currentTurn, promptTotal: 0, outputTotal: 0, llmCalls: 0 });
+        turnMap.set(currentTurn, { turnIndex: currentTurn, promptTotal: 0, outputTotal: 0, llmCalls: 0, timestamp: entry.ts ?? 0 });
       }
     } else if (type === "turn_end") {
       // Keep currentTurn for next turn_start to increment
@@ -600,7 +602,7 @@ function parseDebugLog(filePath: string): DebugLogData | null {
 
       if (currentTurn >= 0) {
         if (!turnMap.has(currentTurn)) {
-          turnMap.set(currentTurn, { turnIndex: currentTurn, promptTotal: 0, outputTotal: 0, llmCalls: 0 });
+          turnMap.set(currentTurn, { turnIndex: currentTurn, promptTotal: 0, outputTotal: 0, llmCalls: 0, timestamp: 0 });
         }
         const t = turnMap.get(currentTurn)!;
         t.promptTotal += inp;
@@ -726,12 +728,30 @@ export function scanWorkspaceStorage(): ScanResult {
     s.debugTotalOutput = dbg.totalOutput;
     s.debugLogPath = dbg.filePath;
 
-    // Enrich individual turns
+    // Enrich individual turns + create synthetic turns for unmatched debug-log entries
     for (const dt of dbg.turns) {
       const matchingTurns = turns.filter(t => t.sessionId === s.sessionId && t.turnIndex === dt.turnIndex);
-      for (const t of matchingTurns) {
-        t.debugPromptTokens = dt.promptTotal;
-        t.debugOutputTokens = dt.outputTotal;
+      if (matchingTurns.length > 0) {
+        for (const t of matchingTurns) {
+          t.debugPromptTokens = dt.promptTotal;
+          t.debugOutputTokens = dt.outputTotal;
+        }
+      } else if (dt.promptTotal > 0 || dt.outputTotal > 0) {
+        // chatSession hasn't flushed this turn yet — create synthetic turn from debug-log
+        const ts = dt.timestamp ? new Date(dt.timestamp).toISOString() : (s.lastTimestamp || "");
+        turns.push({
+          sessionId: s.sessionId,
+          turnIndex: dt.turnIndex,
+          timestamp: ts,
+          modelFamily: s.modelFamily || "unknown",
+          promptTokens: 0,
+          outputTokens: 0,
+          debugPromptTokens: dt.promptTotal,
+          debugOutputTokens: dt.outputTotal,
+          toolCallRounds: dt.llmCalls > 1 ? dt.llmCalls - 1 : 0,
+          toolCallResults: 0,
+          workspaceName: "",
+        });
       }
     }
   }
