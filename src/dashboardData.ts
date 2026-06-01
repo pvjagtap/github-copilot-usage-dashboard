@@ -154,6 +154,7 @@ export interface LiveOtelData {
   traceCached: number;
   metricCached: number;
   lastSeen: string;
+  source: "otel" | "debug-log" | "none";
   byModel: Array<{
     model: string;
     requests: number;
@@ -326,10 +327,52 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
       traceCached: liveStats.traceCached,
       metricCached: liveStats.metricCached,
       lastSeen: liveStats.lastSeen,
+      source: "otel",
       byModel,
     };
   } else {
-    liveOtel = { requests: 0, prompt: 0, completion: 0, cached: 0, traceCached: 0, metricCached: 0, lastSeen: "", byModel: [] };
+    const today = new Date().toISOString().slice(0, 10);
+    const debugTurnsToday = scan.turns.filter(t => t.timestamp && t.timestamp.slice(0, 10) === today && (t.debugPromptTokens > 0 || t.debugOutputTokens > 0));
+
+    if (debugTurnsToday.length > 0) {
+      const byModelMap = new Map<string, { model: string; requests: number; prompt: number; completion: number; traceCached: number; metricCached: number; cached: number }>();
+      let requests = 0;
+      let prompt = 0;
+      let completion = 0;
+      let lastSeen = "";
+
+      for (const turn of debugTurnsToday) {
+        const model = turn.modelFamily || "unknown";
+        if (!byModelMap.has(model)) {
+          byModelMap.set(model, { model, requests: 0, prompt: 0, completion: 0, traceCached: 0, metricCached: 0, cached: 0 });
+        }
+        const row = byModelMap.get(model)!;
+        const turnRequests = Math.max(1, turn.debugLlmCalls || 0);
+        requests += turnRequests;
+        prompt += turn.debugPromptTokens;
+        completion += turn.debugOutputTokens;
+        row.requests += turnRequests;
+        row.prompt += turn.debugPromptTokens;
+        row.completion += turn.debugOutputTokens;
+        if (turn.timestamp > lastSeen) {
+          lastSeen = turn.timestamp;
+        }
+      }
+
+      liveOtel = {
+        requests,
+        prompt,
+        completion,
+        cached: 0,
+        traceCached: 0,
+        metricCached: 0,
+        lastSeen,
+        source: "debug-log",
+        byModel: Array.from(byModelMap.values()),
+      };
+    } else {
+      liveOtel = { requests: 0, prompt: 0, completion: 0, cached: 0, traceCached: 0, metricCached: 0, lastSeen: "", source: "none", byModel: [] };
+    }
   }
 
   const turnsAll: TurnRow[] = scan.turns

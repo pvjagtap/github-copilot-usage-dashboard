@@ -56,6 +56,8 @@ export interface Turn {
   debugPromptTokens: number;
   /** Actual cumulative output tokens from debug-logs. */
   debugOutputTokens: number;
+  /** Number of LLM API calls seen in debug-logs for this turn. */
+  debugLlmCalls: number;
   /** Actual AI credits for this turn from API responses (nano-AIU / 1e9). 0 if not available. */
   debugAicCredits: number;
   toolCallRounds: number;
@@ -231,6 +233,7 @@ function parseSessionFile(filePath: string, wsHash: string, projectName: string)
               outputTokens: meta.outputTokens ?? 0,
               debugPromptTokens: 0,
               debugOutputTokens: 0,
+              debugLlmCalls: 0,
               debugAicCredits: 0,
               toolCallRounds: Array.isArray(meta.toolCallRounds) ? meta.toolCallRounds.length : 0,
               toolCallResults: Array.isArray(meta.toolCallResults) ? meta.toolCallResults.length : 0,
@@ -274,6 +277,7 @@ function parseSessionFile(filePath: string, wsHash: string, projectName: string)
                 outputTokens: 0,
                 debugPromptTokens: 0,
                 debugOutputTokens: 0,
+                debugLlmCalls: 0,
                 debugAicCredits: 0,
                 toolCallRounds: 0,
                 toolCallResults: 0,
@@ -325,6 +329,7 @@ function parseSessionFile(filePath: string, wsHash: string, projectName: string)
         outputTokens: meta.outputTokens ?? 0,
         debugPromptTokens: 0,
         debugOutputTokens: 0,
+        debugLlmCalls: 0,
         debugAicCredits: 0,
         toolCallRounds: Array.isArray(meta.toolCallRounds) ? meta.toolCallRounds.length : 0,
         toolCallResults: Array.isArray(meta.toolCallResults) ? meta.toolCallResults.length : 0,
@@ -753,6 +758,7 @@ export function scanWorkspaceStorage(): ScanResult {
         for (const t of matchingTurns) {
           t.debugPromptTokens = dt.promptTotal;
           t.debugOutputTokens = dt.outputTotal;
+          t.debugLlmCalls = dt.llmCalls;
           t.debugAicCredits = dt.nanoAiu / 1_000_000_000;
         }
       } else if (dt.promptTotal > 0 || dt.outputTotal > 0) {
@@ -767,6 +773,7 @@ export function scanWorkspaceStorage(): ScanResult {
           outputTokens: 0,
           debugPromptTokens: dt.promptTotal,
           debugOutputTokens: dt.outputTotal,
+          debugLlmCalls: dt.llmCalls,
           debugAicCredits: dt.nanoAiu / 1_000_000_000,
           toolCallRounds: dt.llmCalls > 1 ? dt.llmCalls - 1 : 0,
           toolCallResults: 0,
