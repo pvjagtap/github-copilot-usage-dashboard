@@ -7,10 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.2.1] - 2026-05-25
+## [1.4.0] - 2026-06-01
+
+### Added
+- AI Credits (AIC) calculation engine (`aicCredits.ts`) with all 22 official model rates
+- Auto-detect promotional period (June 1 – September 1, 2026) with dual overage display
+- Per-session AI Credits column in sessions table
+- Calendar heatmap for daily credit usage in current billing cycle month
+- Status bar now shows current active session only (model, tokens, AIC credits)
+- Configurable AIC settings: `copilotUsage.aic.plan`, `.billingCycleStartDay`, `.monthlyCreditsIncluded`, `.overageCostPerCredit`, `.customModelCosts`
+- Upper-bound estimation warning when cached token data is unavailable
+- OTel + scanner double-counting prevention guard
+
+### Changed
+- AIC calculations only include data on or after June 1, 2026 (AIC effective date)
+- Status bar displays current session details instead of all-session aggregate
+- Dashboard Overage section shows both "With Promo" and "Without Promo" costs during promotional window
 
 ### Fixed
-- Prevent dashboard charts from stretching after filter clicks, refreshes, status-bar opens, and webview visibility changes by resetting stale canvas dimensions and rendering Chart.js into stable responsive frames.
+- Potential double-counting of tokens when both OTel live data and scanner data exist for the same day
+
+## [1.2.0] - 2026-05-25
+
+### Added
+- Show all tools and projects instead of limiting to top 10
+
+### Changed
+- Charts rendered in scrollable frames to prevent stretching after filter clicks, refreshes, and webview visibility changes
+- Build instructions updated in README
+
+### Fixed
+- Dashboard charts no longer stretch after filter clicks, refreshes, or status-bar opens (stale canvas dimensions reset)
+
+## [1.1.0] - 2026-05-20
+
+### Added
+- Debug-log integration: scanner now parses `debug-logs/main.jsonl` for actual per-API-call token counts
+- Sessions enriched with `debugTotalPrompt`, `debugTotalOutput`, `debugLogPath`
+- Turns enriched with `debugPromptTokens`, `debugOutputTokens`
+- `debugLogSessions` stat added to ScanStats
+
+### Changed
+- Dashboard prefers actual debug-log tokens over chatSession snapshot estimates
+- Timestamps default to local timezone (hourly chart, generatedAt, lastSeen)
 
 ## [1.0.9] - 2026-04-15
 
@@ -25,7 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.7] - 2026-04-10
 
 ### Changed
-- Rebranded repository to MAGNA-OpenSource
+- Repository branding and configuration
 - Added `repo.config.json` and `apply-repo-config.js` for repo-independent configuration
 
 ## [0.1.6] - 2026-04-10
@@ -77,10 +116,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Status bar with session count and token totals
 - Multi-root workspace support
 
-[Unreleased]: https://github.com/MAGNA-OpenSource/github-copilot-usage-dashboard/compare/v1.2.1...HEAD
-[1.2.1]: https://github.com/MAGNA-OpenSource/github-copilot-usage-dashboard/compare/v1.2.0...v1.2.1
-[0.1.7]: https://github.com/MAGNA-OpenSource/github-copilot-usage-dashboard/compare/v0.1.6...v0.1.7
-[0.1.6]: https://github.com/MAGNA-OpenSource/github-copilot-usage-dashboard/compare/v0.1.4...v0.1.6
-[0.1.4]: https://github.com/MAGNA-OpenSource/github-copilot-usage-dashboard/compare/v0.1.3...v0.1.4
-[0.1.3]: https://github.com/MAGNA-OpenSource/github-copilot-usage-dashboard/compare/v0.1.2...v0.1.3
-[0.1.2]: https://github.com/MAGNA-OpenSource/github-copilot-usage-dashboard/releases/tag/v0.1.2
+[Unreleased]: https://github.com/pvjagtap/github-copilot-usage-dashboard/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/pvjagtap/github-copilot-usage-dashboard/compare/v1.2.0...v1.4.0
+[1.2.0]: https://github.com/pvjagtap/github-copilot-usage-dashboard/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/pvjagtap/github-copilot-usage-dashboard/compare/v1.0.9...v1.1.0
+[1.0.9]: https://github.com/pvjagtap/github-copilot-usage-dashboard/compare/v0.1.7...v1.0.9
+[0.1.7]: https://github.com/pvjagtap/github-copilot-usage-dashboard/compare/v0.1.6...v0.1.7
+[0.1.6]: https://github.com/pvjagtap/github-copilot-usage-dashboard/compare/v0.1.4...v0.1.6
+[0.1.4]: https://github.com/pvjagtap/github-copilot-usage-dashboard/compare/v0.1.3...v0.1.4
+[0.1.3]: https://github.com/pvjagtap/github-copilot-usage-dashboard/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/pvjagtap/github-copilot-usage-dashboard/releases/tag/v0.1.2
