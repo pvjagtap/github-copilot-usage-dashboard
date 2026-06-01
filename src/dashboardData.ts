@@ -412,15 +412,21 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
   // for today. If scanner already has today's data, it's more complete (has per-turn
   // granularity) — OTel would just duplicate it without the cached breakdown.
   const todayStr = new Date().toISOString().slice(0, 10);
-  const scanHasTodayData = creditEntries.some(e => e.date === todayStr);
-  if (liveStats && liveStats.requests > 0 && todayStr >= AIC_EFFECTIVE_DATE && !scanHasTodayData) {
+  // Models already covered by scanner data for today — avoid double-counting these
+  const scanModelsToday = new Set(
+    creditEntries.filter(e => e.date === todayStr).map(e => e.model.toLowerCase())
+  );
+  if (liveStats && liveStats.requests > 0 && todayStr >= AIC_EFFECTIVE_DATE) {
     for (const m of liveStats.byModel.values()) {
+      // Skip models already in today's scanner data (would double-count).
+      // Always add models that only appear in OTel (scanner hasn't seen them).
+      if (scanModelsToday.has(m.model.toLowerCase())) { continue; }
       creditEntries.push({
         model: m.model,
         inputTokens: m.prompt,
         outputTokens: m.completion,
         cachedTokens: m.cached,
-        date: new Date().toISOString().slice(0, 10),
+        date: todayStr,
         actualCredits: undefined,
       });
     }
