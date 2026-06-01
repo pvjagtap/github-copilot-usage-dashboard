@@ -8,6 +8,8 @@ import { AICConfig, DEFAULT_AIC_CONFIG, createCalculatorFromConfig } from "./aic
 
 const OTEL_PORT = 14318;
 const DEFAULT_REFRESH_MS = 120_000;
+/** Debounce interval for OTel-triggered dashboard/status updates (ms) */
+const OTEL_DEBOUNCE_MS = 2_000;
 
 let receiver: OTelReceiver | undefined;
 let statusBar: StatusBarProvider | undefined;
@@ -16,6 +18,10 @@ let lastScan: ScanResult | undefined;
 let output: vscode.OutputChannel;
 /** ISO timestamp of when this VS Code instance activated the extension — used to scope "current" to this instance only */
 let activationTime: string;
+/** Cached dashboard data — invalidated when scan or OTel changes */
+let cachedDashData: DashboardData | undefined;
+let lastOtelRequests = 0;
+let otelDebounceTimer: ReturnType<typeof setTimeout> | undefined;
 
 function getAICConfig(): AICConfig {
   const cfg = vscode.workspace.getConfiguration("copilotUsage.aic");
@@ -29,16 +35,33 @@ function getAICConfig(): AICConfig {
 }
 
 function buildData(): DashboardData {
+  const otelStats = receiver?.getStats() ?? null;
+  const otelReqs = otelStats?.requests ?? 0;
+
+  // Return cached data if nothing changed
+  if (cachedDashData && otelReqs === lastOtelRequests) {
+    return cachedDashData;
+  }
+  lastOtelRequests = otelReqs;
+
+  const t0 = Date.now();
   const scan = lastScan ?? { sessions: [], turns: [], toolCalls: [], subagents: [], stats: { sourceFiles: 0, canonicalSessions: 0, mirroredSessions: 0, mirrorCopiesPruned: 0, turnsStored: 0, toolCallsStored: 0, promptPreviews: 0, transcriptsFound: 0, debugLogSessions: 0 } };
-  const live = receiver?.getStats() ?? null;
   const aicConfig = getAICConfig();
-  return buildDashboardData(scan, live, aicConfig);
+  cachedDashData = buildDashboardData(scan, otelStats, aicConfig);
+  const elapsed = Date.now() - t0;
+  if (elapsed > 200) {
+    output.appendLine(`buildData took ${elapsed}ms (${scan.stats.turnsStored} turns, ${scan.stats.canonicalSessions} sessions)`);
+  }
+  return cachedDashData;
 }
 
 async function runScan(): Promise<void> {
   try {
+    const t0 = Date.now();
     lastScan = scanWorkspaceStorage();
-    output.appendLine(`Scan: ${lastScan.stats.canonicalSessions} sessions, ${lastScan.stats.turnsStored} turns, ${lastScan.stats.toolCallsStored} tools`);
+    cachedDashData = undefined; // Invalidate cache
+    const elapsed = Date.now() - t0;
+    output.appendLine(`Scan: ${lastScan.stats.canonicalSessions} sessions, ${lastScan.stats.turnsStored} turns, ${lastScan.stats.toolCallsStored} tools (${elapsed}ms)`);
   } catch (err) {
     output.appendLine(`Scan error: ${err}`);
   }
@@ -130,10 +153,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Initial status bar with scan data
   updateStatusBar();
 
-  // Update status bar and dashboard on new OTel data
+  // Update status bar and dashboard on new OTel data (debounced to avoid thrashing)
   receiver.onStats(() => {
-    updateStatusBar();
-    DashboardPanel.updateIfVisible(buildData());
+    if (otelDebounceTimer) { return; } // Already scheduled
+    otelDebounceTimer = setTimeout(() => {
+      otelDebounceTimer = undefined;
+      updateStatusBar();
+      DashboardPanel.updateIfVisible(buildData());
+    }, OTEL_DEBOUNCE_MS);
   });
 
   // Commands
@@ -278,17 +305,27 @@ function updateStatusBar(): void {
     }
   }
 
+  // Compute per-request AIC from last OTel request
+  let lastRequestAIC = 0;
+  if (otel && otel.lastRequest) {
+    const lr = otel.lastRequest;
+    const reqCredits = calculator.calculateCredits(lr.modelName, lr.promptTokens, lr.completionTokens, lr.cachedTokens);
+    lastRequestAIC = Math.round(reqCredits.totalCredits * 100) / 100;
+  }
+
   statusBar.updateStatus({
     otel,
     scan,
     currentSession,
     totalSessions: scan?.canonicalSessions ?? 0,
     currentSessionAIC,
+    lastRequestAIC,
   });
 }
 
 export function deactivate(): void {
   if (scanTimer) { clearInterval(scanTimer); }
+  if (otelDebounceTimer) { clearTimeout(otelDebounceTimer); }
   receiver?.stop();
   statusBar?.dispose();
 }

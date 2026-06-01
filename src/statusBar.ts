@@ -28,8 +28,10 @@ export interface StatusBarData {
   currentSession: CurrentSessionInfo | null;
   /** Total sessions in scan (for tooltip context) */
   totalSessions: number;
-  /** Current session AIC credits */
+  /** Current session AIC credits (cumulative) */
   currentSessionAIC: number;
+  /** Last single request's AIC credits */
+  lastRequestAIC: number;
 }
 
 export class StatusBarProvider {
@@ -45,7 +47,7 @@ export class StatusBarProvider {
 
   /** Legacy: OTel-only update */
   update(stats: LiveStats | null): void {
-    this.updateStatus({ otel: stats, scan: null, currentSession: null, totalSessions: 0, currentSessionAIC: 0 });
+    this.updateStatus({ otel: stats, scan: null, currentSession: null, totalSessions: 0, currentSessionAIC: 0, lastRequestAIC: 0 });
   }
 
   /** Full update with current session + OTel data */
@@ -64,14 +66,16 @@ export class StatusBarProvider {
       const p = fmt(otel!.prompt);
       const o = fmt(otel!.completion);
       const c = fmt(otel!.cached);
-      const aic = data?.currentSessionAIC ? ` | AIC(cur):${data.currentSessionAIC.toFixed(1)}` : "";
+      const lastReq = data?.lastRequestAIC ? ` Req:${data.lastRequestAIC.toFixed(1)}` : "";
+      const aic = data?.currentSessionAIC ? ` | AIC(sess):${data.currentSessionAIC.toFixed(1)}${lastReq}` : "";
       this.item.text = `$(zap) In:${p} Out:${o} Cache:${c}${aic}`;
       this.item.tooltip = [
         `Copilot Token Usage — This Session (${otel!.requests} requests)`,
         `  Prompt: ${otel!.prompt.toLocaleString()}`,
         `  Output: ${otel!.completion.toLocaleString()}`,
         `  Cached: ${otel!.cached.toLocaleString()}`,
-        data?.currentSessionAIC ? `  AI Credits (current session): ${data.currentSessionAIC.toFixed(2)}` : "",
+        data?.currentSessionAIC ? `  AI Credits (session total): ${data.currentSessionAIC.toFixed(2)}` : "",
+        data?.lastRequestAIC ? `  AI Credits (last request): ${data.lastRequestAIC.toFixed(2)}` : "",
         "",
         cs ? `Session: ${cs.sessionShort}… | Model: ${cs.model} | Turns: ${cs.turns}` : "",
         data?.totalSessions ? `Total sessions in workspace: ${data.totalSessions}` : "",
@@ -81,7 +85,8 @@ export class StatusBarProvider {
     } else if (cs) {
       const p = fmt(cs.prompt);
       const o = fmt(cs.output);
-      const aic = cs.aicCredits ? ` | AIC(cur):${cs.aicCredits.toFixed(1)}` : "";
+      const lastReq = data?.lastRequestAIC ? ` Req:${data.lastRequestAIC.toFixed(1)}` : "";
+      const aic = cs.aicCredits ? ` | AIC(sess):${cs.aicCredits.toFixed(1)}${lastReq}` : "";
       this.item.text = `$(dashboard) ${cs.model} | In:${p} Out:${o}${aic}`;
       this.item.tooltip = [
         `Copilot Usage — Current Session`,
@@ -92,7 +97,8 @@ export class StatusBarProvider {
         `  Output: ${cs.output.toLocaleString()}`,
         `  Tool calls: ${cs.toolCalls}`,
         `  Duration: ${cs.durationMin}m`,
-        cs.aicCredits ? `  AI Credits (current session): ${cs.aicCredits.toFixed(2)}` : "",
+        cs.aicCredits ? `  AI Credits (session total): ${cs.aicCredits.toFixed(2)}` : "",
+        data?.lastRequestAIC ? `  AI Credits (last request): ${data.lastRequestAIC.toFixed(2)}` : "",
         "",
         data?.totalSessions ? `Total sessions in workspace: ${data.totalSessions}` : "",
         `Dashboard AIC cards show billing-cycle totals across sessions.`,

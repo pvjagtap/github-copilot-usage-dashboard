@@ -678,16 +678,80 @@ function discoverDebugLogs(wsRoot: string): Map<string, DebugLogData> {
   return map;
 }
 
+/**
+ * Discover debug-logs with mtime caching — avoids re-parsing unchanged files.
+ */
+function discoverDebugLogsCached(wsRoot: string): Map<string, DebugLogData> {
+  const map = new Map<string, DebugLogData>();
+  if (!fs.existsSync(wsRoot)) { return map; }
+
+  let dirs: string[];
+  try { dirs = fs.readdirSync(wsRoot); } catch { return map; }
+
+  for (const dirName of dirs.sort()) {
+    const dlDir = path.join(wsRoot, dirName, "GitHub.copilot-chat", "debug-logs");
+    try { if (!fs.statSync(dlDir).isDirectory()) { continue; } } catch { continue; }
+
+    let sessionDirs: string[];
+    try { sessionDirs = fs.readdirSync(dlDir); } catch { continue; }
+
+    for (const sid of sessionDirs) {
+      const mainJsonl = path.join(dlDir, sid, "main.jsonl");
+      let mtime: number;
+      try {
+        const st = fs.statSync(mainJsonl);
+        if (!st.isFile()) { continue; }
+        mtime = st.mtimeMs;
+      } catch { continue; }
+
+      const cached = _debugLogCache.get(mainJsonl);
+      if (cached && cached.mtime === mtime) {
+        map.set(cached.data.sessionId, cached.data);
+      } else {
+        const data = parseDebugLog(mainJsonl);
+        if (data) {
+          _debugLogCache.set(mainJsonl, { mtime, data });
+          map.set(data.sessionId, data);
+        } else {
+          _debugLogCache.delete(mainJsonl);
+        }
+      }
+    }
+  }
+
+  return map;
+}
+
+// ─── File-level mtime cache for incremental scanning ──────────
+const _sessionBundleCache = new Map<string, { mtime: number; bundle: SessionBundle }>();
+const _debugLogCache = new Map<string, { mtime: number; data: DebugLogData }>();
+
 export function scanWorkspaceStorage(): ScanResult {
   const wsRoot = getWorkspaceStoragePath();
   const sessionFiles = discoverSessionFiles(wsRoot);
   const transcriptMap = discoverTranscriptFiles(wsRoot);
-  const debugLogMap = discoverDebugLogs(wsRoot);
 
-  // Parse all session files
+  // Discover debug-logs with mtime caching
+  const debugLogMap = discoverDebugLogsCached(wsRoot);
+
+  // Parse session files with mtime caching (skip unchanged files)
   const bundlesBySession = new Map<string, SessionBundle[]>();
   for (const file of sessionFiles) {
-    const bundle = parseSessionFile(file.path, file.wsHash, file.project);
+    let mtime: number;
+    try { mtime = fs.statSync(file.path).mtimeMs; } catch { continue; }
+
+    let bundle: SessionBundle | null;
+    const cached = _sessionBundleCache.get(file.path);
+    if (cached && cached.mtime === mtime) {
+      bundle = cached.bundle;
+    } else {
+      bundle = parseSessionFile(file.path, file.wsHash, file.project);
+      if (bundle) {
+        _sessionBundleCache.set(file.path, { mtime, bundle });
+      } else {
+        _sessionBundleCache.delete(file.path);
+      }
+    }
     if (!bundle || !bundle.session.sessionId) { continue; }
     const sid = bundle.session.sessionId;
     const list = bundlesBySession.get(sid) ?? [];

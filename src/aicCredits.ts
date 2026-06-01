@@ -128,6 +128,8 @@ export const DEFAULT_MODEL_COSTS: ModelCostRate[] = [
 
   // ── OpenAI ──
   // Source: https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing#openai
+  { model: "gpt-4o-mini",          inputCreditsPerMillion: 15,  outputCreditsPerMillion: 60,   cachedInputCreditsPerMillion: 7.5,  cacheWriteCreditsPerMillion: 0, tier: "base" },
+  { model: "gpt-4o",               inputCreditsPerMillion: 250, outputCreditsPerMillion: 1000, cachedInputCreditsPerMillion: 125,  cacheWriteCreditsPerMillion: 0, tier: "base" },
   { model: "gpt-5.5",             inputCreditsPerMillion: 500, outputCreditsPerMillion: 3000, cachedInputCreditsPerMillion: 50,   cacheWriteCreditsPerMillion: 0, tier: "premium" },
   { model: "gpt-5.4",             inputCreditsPerMillion: 250, outputCreditsPerMillion: 1500, cachedInputCreditsPerMillion: 25,   cacheWriteCreditsPerMillion: 0, tier: "premium" },
   { model: "gpt-5.4-mini",        inputCreditsPerMillion: 75,  outputCreditsPerMillion: 450,  cachedInputCreditsPerMillion: 7.5,  cacheWriteCreditsPerMillion: 0, tier: "base" },

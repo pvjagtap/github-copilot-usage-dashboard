@@ -23,6 +23,8 @@ export interface LiveStats {
   metricCached: number;
   lastSeen: string;
   byModel: Map<string, ModelStats>;
+  /** The most recent OTel request (for per-request credit display) */
+  lastRequest: OTelRequest | null;
 }
 
 export interface ModelStats {
@@ -245,6 +247,7 @@ export class OTelReceiver {
       metricCached,
       lastSeen: this.requests.length > 0 ? this.requests[this.requests.length - 1].timestamp : "",
       byModel,
+      lastRequest: this.requests.length > 0 ? this.requests[this.requests.length - 1] : null,
     };
   }
 

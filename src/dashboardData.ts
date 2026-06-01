@@ -164,6 +164,10 @@ export interface LiveOtelData {
     metricCached: number;
     cached: number;
   }>;
+  /** Session-cumulative AIC credits computed from live OTel data */
+  sessionAIC: number;
+  /** Last single request's AIC credits */
+  lastRequestAIC: number;
 }
 
 // ─── Aggregation ──────────────────────────────────────────────
@@ -319,6 +323,19 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
       metricCached: m.metricCached,
       cached: m.cached,
     }));
+    // Compute session-cumulative AIC from live OTel
+    let sessionAIC = 0;
+    for (const m of liveStats.byModel.values()) {
+      const usage = calculator.calculateCredits(m.model, m.prompt, m.completion, m.cached);
+      sessionAIC += usage.totalCredits;
+    }
+    // Compute last request AIC
+    let lastRequestAIC = 0;
+    if (liveStats.lastRequest) {
+      const lr = liveStats.lastRequest;
+      const reqCredits = calculator.calculateCredits(lr.modelName, lr.promptTokens, lr.completionTokens, lr.cachedTokens);
+      lastRequestAIC = reqCredits.totalCredits;
+    }
     liveOtel = {
       requests: liveStats.requests,
       prompt: liveStats.prompt,
@@ -329,6 +346,8 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
       lastSeen: liveStats.lastSeen,
       source: "otel",
       byModel,
+      sessionAIC: Math.round(sessionAIC * 100) / 100,
+      lastRequestAIC: Math.round(lastRequestAIC * 100) / 100,
     };
   } else {
     const today = new Date().toISOString().slice(0, 10);
@@ -340,6 +359,8 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
       let prompt = 0;
       let completion = 0;
       let lastSeen = "";
+      let sessionAIC = 0;
+      let lastRequestAIC = 0;
 
       for (const turn of debugTurnsToday) {
         const model = turn.modelFamily || "unknown";
@@ -357,6 +378,15 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
         if (turn.timestamp > lastSeen) {
           lastSeen = turn.timestamp;
         }
+        // Compute AIC per turn
+        if (turn.debugAicCredits > 0) {
+          sessionAIC += turn.debugAicCredits;
+          lastRequestAIC = turn.debugAicCredits;
+        } else {
+          const usage = calculator.calculateCredits(model, turn.debugPromptTokens, turn.debugOutputTokens, 0);
+          sessionAIC += usage.totalCredits;
+          lastRequestAIC = usage.totalCredits;
+        }
       }
 
       liveOtel = {
@@ -369,21 +399,26 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
         lastSeen,
         source: "debug-log",
         byModel: Array.from(byModelMap.values()),
+        sessionAIC: Math.round(sessionAIC * 100) / 100,
+        lastRequestAIC: Math.round(lastRequestAIC * 100) / 100,
       };
     } else {
-      liveOtel = { requests: 0, prompt: 0, completion: 0, cached: 0, traceCached: 0, metricCached: 0, lastSeen: "", source: "none", byModel: [] };
+      liveOtel = { requests: 0, prompt: 0, completion: 0, cached: 0, traceCached: 0, metricCached: 0, lastSeen: "", source: "none", byModel: [], sessionAIC: 0, lastRequestAIC: 0 };
     }
   }
 
-  const turnsAll: TurnRow[] = scan.turns
+  // Limit turnsAll to most recent 500 to keep webview payload small
+  const sortedTurns = scan.turns
     .filter(t => t.timestamp)
-    .map(t => ({
-      sessionId: t.sessionId,
-      timestamp: t.timestamp,
-      model: t.modelFamily || 'unknown',
-      prompt: t.debugPromptTokens || t.promptTokens,
-      output: t.debugOutputTokens || t.outputTokens,
-    }));
+    .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+    .slice(0, 500);
+  const turnsAll: TurnRow[] = sortedTurns.map(t => ({
+    sessionId: t.sessionId,
+    timestamp: t.timestamp,
+    model: t.modelFamily || 'unknown',
+    prompt: t.debugPromptTokens || t.promptTokens,
+    output: t.debugOutputTokens || t.outputTokens,
+  }));
 
   // ─── AIC Credit Calculations ──────────────────────────────────
 

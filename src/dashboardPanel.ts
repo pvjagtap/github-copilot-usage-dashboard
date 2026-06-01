@@ -411,8 +411,8 @@ function renderOtel(live) {
   el.innerHTML = '<div class="table-card"><div class="section-head"><div class="section-title">Live OpenTelemetry</div><div class="section-subtitle">'+esc(sourceLabel)+' • Last event '+esc(ls)+'</div></div>'
     +'<div class="note">'+(live.source === 'debug-log' ? 'Using local debug-log activity because OTLP export is unavailable. Cache-read tokens are not available in this fallback.' : 'Live OTLP export. Cached tokens prefer cumulative metric deltas when available.')+'</div>'
     +'<div class="stats-row">'
-    +['OTel Requests:'+live.requests+':last event '+esc(ls),'Live Prompt:'+fmt(live.prompt)+':from traces','Live Output:'+fmt(live.completion)+':from traces','Live Cached:'+fmt(live.cached)+':'+csub,'Trace Cache:'+fmt(live.traceCached)+':cache_read','Metric Cache:'+fmt(live.metricCached)+':token.usage']
-      .map((s,i)=>{const p=s.split(':');return '<div class="stat-card"><div class="label">'+p[0]+'</div><div class="value'+(i===3?' cached':'')+'">'+p[1]+'</div><div class="sub">'+p[2]+'</div></div>';}).join('')
+    +['OTel Requests:'+live.requests+':last event '+esc(ls),'Live Prompt:'+fmt(live.prompt)+':from traces','Live Output:'+fmt(live.completion)+':from traces','Live Cached:'+fmt(live.cached)+':'+csub,'Trace Cache:'+fmt(live.traceCached)+':cache_read','Metric Cache:'+fmt(live.metricCached)+':token.usage','AIC (sess):'+((live.sessionAIC||0).toFixed(1))+':session total','AIC (last req):'+ ((live.lastRequestAIC||0).toFixed(1))+':last request']
+      .map((s,i)=>{const p=s.split(':');return '<div class="stat-card"><div class="label">'+p[0]+'</div><div class="value'+(i===3?' cached':i>=6?' orange':'')+'">'+p[1]+'</div><div class="sub">'+p[2]+'</div></div>';}).join('')
     +'</div>'
     +'<div class="section-title" style="margin-top:8px">Live OTel by Model</div>'
     +'<table><thead><tr><th>Model</th><th class="num">Requests</th><th class="num">Prompt</th><th class="num">Output</th><th class="num">Trace Cache</th><th class="num">Metric Cache</th><th class="num">Effective Cache</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
@@ -550,13 +550,10 @@ function renderAIC(aic) {
     ? '<div style="margin:12px 0"><div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:4px"><span>'+aic.totalCredits.toFixed(1)+' / '+aic.monthlyBudget+' credits used'+( isPromo ? ' (promo)' : '')+'</span><span>'+pct+'%</span></div><div style="background:var(--border);border-radius:4px;height:8px;overflow:hidden"><div style="width:'+pct+'%;height:100%;background:'+barColor+';border-radius:4px;transition:width 0.3s"></div></div></div>'
     : '';
 
-  // Stats row
+  // Stats row — removed Output Credits, Cache Savings, Remaining (always 0 without cache data from API)
   const statsCards = [
     {l:'Total Credits',v:aic.totalCredits.toFixed(1),s:planLabel+' plan',c:'orange'},
     {l:'Input Credits',v:aic.inputCredits.toFixed(1),s:'prompt tokens'},
-    {l:'Output Credits',v:aic.outputCredits.toFixed(1),s:'completion tokens'},
-    {l:'Cache Savings',v:aic.cachedCredits.toFixed(1),s:'discounted cached'},
-    {l:'Remaining',v:aic.creditsRemaining >= 0 ? aic.creditsRemaining.toFixed(1) : '∞',s:aic.daysRemaining+' days left',c:aic.creditsRemaining >= 0 && aic.creditsRemaining < 100 ? 'red' : ''},
     {l:'Daily Avg',v:aic.dailyAverage.toFixed(1),s:'credits/day'},
     {l:'Projected',v:aic.projectedTotal.toFixed(0),s:'end of cycle',c:projPct>=100?'red':projPct>=80?'orange':''},
   ];
