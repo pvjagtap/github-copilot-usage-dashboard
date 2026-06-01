@@ -211,6 +211,20 @@ function updateStatusBar(): void {
       sessionAIC += usage.totalCredits;
     }
 
+    // Cross-check: if session has debug-log aggregate and per-turn sum is lower,
+    // use the aggregate (debug log is authoritative — chatSession may not have flushed all turns)
+    if (latest.debugTotalPrompt > 0) {
+      const aggregateAIC = calculator.calculateCredits(
+        latest.modelFamily || "unknown",
+        latest.debugTotalPrompt,
+        latest.debugTotalOutput || 0,
+        0
+      ).totalCredits;
+      if (aggregateAIC > sessionAIC) {
+        sessionAIC = aggregateAIC;
+      }
+    }
+
     // Duration
     let durationMin = 0;
     if (latest.firstTimestamp && latest.lastTimestamp) {
