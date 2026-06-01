@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-05-25
+
+### Fixed
+- Prevent dashboard charts from stretching after filter clicks, refreshes, status-bar opens, and webview visibility changes by resetting stale canvas dimensions and rendering Chart.js into stable responsive frames.
+
 ## [1.0.9] - 2026-04-15
 
 ### Added
@@ -72,7 +77,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Status bar with session count and token totals
 - Multi-root workspace support
 
-[Unreleased]: https://github.com/MAGNA-OpenSource/github-copilot-usage-dashboard/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/MAGNA-OpenSource/github-copilot-usage-dashboard/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/MAGNA-OpenSource/github-copilot-usage-dashboard/compare/v1.2.0...v1.2.1
 [0.1.7]: https://github.com/MAGNA-OpenSource/github-copilot-usage-dashboard/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/MAGNA-OpenSource/github-copilot-usage-dashboard/compare/v0.1.4...v0.1.6
 [0.1.4]: https://github.com/MAGNA-OpenSource/github-copilot-usage-dashboard/compare/v0.1.3...v0.1.4

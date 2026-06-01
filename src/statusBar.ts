@@ -8,11 +8,28 @@ function fmt(n: number): string {
   return n.toLocaleString();
 }
 
+/** Current session info for the status bar (this VS Code instance only) */
+export interface CurrentSessionInfo {
+  sessionId: string;
+  sessionShort: string;
+  model: string;
+  turns: number;
+  prompt: number;
+  output: number;
+  toolCalls: number;
+  durationMin: number;
+  aicCredits: number;
+}
+
 export interface StatusBarData {
   otel: LiveStats | null;
   scan: ScanStats | null;
-  totalPrompt: number;
-  totalOutput: number;
+  /** Current/latest session for this instance */
+  currentSession: CurrentSessionInfo | null;
+  /** Total sessions in scan (for tooltip context) */
+  totalSessions: number;
+  /** Current session AIC credits */
+  currentSessionAIC: number;
 }
 
 export class StatusBarProvider {
@@ -28,17 +45,16 @@ export class StatusBarProvider {
 
   /** Legacy: OTel-only update */
   update(stats: LiveStats | null): void {
-    this.updateStatus({ otel: stats, scan: null, totalPrompt: 0, totalOutput: 0 });
+    this.updateStatus({ otel: stats, scan: null, currentSession: null, totalSessions: 0, currentSessionAIC: 0 });
   }
 
-  /** Full update with scan + OTel data */
+  /** Full update with current session + OTel data */
   updateStatus(data: StatusBarData | null): void {
     const otel = data?.otel;
-    const scan = data?.scan;
     const hasOtel = otel && otel.requests > 0;
-    const hasScan = scan && scan.canonicalSessions > 0;
+    const cs = data?.currentSession;
 
-    if (!hasOtel && !hasScan) {
+    if (!hasOtel && !cs) {
       this.item.text = "$(dashboard) Copilot Usage";
       this.item.tooltip = "Click to open Copilot Usage Dashboard";
       return;
@@ -48,29 +64,38 @@ export class StatusBarProvider {
       const p = fmt(otel!.prompt);
       const o = fmt(otel!.completion);
       const c = fmt(otel!.cached);
-      this.item.text = `$(zap) In:${p} Out:${o} Cache:${c}`;
+      const aic = data?.currentSessionAIC ? ` | AIC:${data.currentSessionAIC.toFixed(1)}` : "";
+      this.item.text = `$(zap) In:${p} Out:${o} Cache:${c}${aic}`;
       this.item.tooltip = [
-        `Copilot Token Usage (${otel!.requests} OTel requests)`,
+        `Copilot Token Usage — This Session (${otel!.requests} requests)`,
         `  Prompt: ${otel!.prompt.toLocaleString()}`,
         `  Output: ${otel!.completion.toLocaleString()}`,
         `  Cached: ${otel!.cached.toLocaleString()}`,
+        data?.currentSessionAIC ? `  AI Credits: ${data.currentSessionAIC.toFixed(2)}` : "",
         "",
-        hasScan ? `Sessions: ${scan!.canonicalSessions} | Turns: ${scan!.turnsStored} | Tools: ${scan!.toolCallsStored}` : "",
+        cs ? `Session: ${cs.sessionShort}… | Model: ${cs.model} | Turns: ${cs.turns}` : "",
+        data?.totalSessions ? `Total sessions in workspace: ${data.totalSessions}` : "",
         "Click to open full dashboard",
       ].filter(Boolean).join("\n");
-    } else if (hasScan) {
-      const tp = fmt(data!.totalPrompt);
-      const to = fmt(data!.totalOutput);
-      this.item.text = `$(dashboard) ${scan!.canonicalSessions} sessions | In:${tp} Out:${to}`;
+    } else if (cs) {
+      const p = fmt(cs.prompt);
+      const o = fmt(cs.output);
+      const aic = cs.aicCredits ? ` | AIC:${cs.aicCredits.toFixed(1)}` : "";
+      this.item.text = `$(dashboard) ${cs.model} | In:${p} Out:${o}${aic}`;
       this.item.tooltip = [
-        `Copilot Usage (${scan!.canonicalSessions} sessions)`,
-        `  Turns: ${scan!.turnsStored}`,
-        `  Tool calls: ${scan!.toolCallsStored}`,
-        `  Prompt: ${data!.totalPrompt.toLocaleString()}`,
-        `  Output: ${data!.totalOutput.toLocaleString()}`,
+        `Copilot Usage — Current Session`,
+        `  Session: ${cs.sessionShort}…`,
+        `  Model: ${cs.model}`,
+        `  Turns: ${cs.turns}`,
+        `  Prompt: ${cs.prompt.toLocaleString()}`,
+        `  Output: ${cs.output.toLocaleString()}`,
+        `  Tool calls: ${cs.toolCalls}`,
+        `  Duration: ${cs.durationMin}m`,
+        cs.aicCredits ? `  AI Credits: ${cs.aicCredits.toFixed(2)}` : "",
         "",
+        data?.totalSessions ? `Total sessions in workspace: ${data.totalSessions}` : "",
         "Click to open full dashboard",
-      ].join("\n");
+      ].filter(Boolean).join("\n");
     }
   }
 

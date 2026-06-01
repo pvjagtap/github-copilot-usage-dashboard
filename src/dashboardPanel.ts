@@ -154,9 +154,21 @@ td { padding: 8px; border-bottom: 1px solid var(--border); font-size: 12px; }
 .charts-grid { display: grid; grid-template-columns: 1fr; gap: 16px; margin-bottom: 16px; }
 @media (min-width: 900px) { .charts-grid { grid-template-columns: 1fr 1fr; } }
 .chart-wide { grid-column: 1 / -1; }
-.chart-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+.chart-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; min-width: 0; overflow: hidden; }
 .chart-card h3 { font-size: 13px; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
-.chart-card canvas#modelChart { max-height: 500px; }
+.chart-card canvas { display: block; max-width: 100%; }
+.chart-frame { position: relative; width: 100%; height: 340px; }
+.chart-frame-pie { height: 380px; }
+.chart-frame-wide { height: 320px; }
+.chart-scroll { overflow-x: hidden; overflow-y: auto; max-height: 500px; min-height: 300px; }
+.chart-tall { position: relative; width: 100%; min-height: 300px; }
+.chart-frame > canvas,
+.chart-tall > canvas { width: 100% !important; height: 100% !important; }
+@media (max-width: 700px) {
+  .chart-frame { height: 280px; }
+  .chart-frame-pie { height: 320px; }
+  .chart-frame-wide { height: 260px; }
+}
 .tz-toggle { display: inline-flex; gap: 0; margin-left: auto; }
 .tz-btn { font-size: 11px; padding: 3px 10px; background: var(--card); color: var(--muted); border: 1px solid var(--border); cursor: pointer; }
 .tz-btn:first-child { border-radius: 4px 0 0 4px; }
@@ -194,16 +206,17 @@ td { padding: 8px; border-bottom: 1px solid var(--border); font-size: 12px; }
 <div class="filter-bar" id="filter-bar"></div>
 <div class="stats-row" id="stats-row"></div>
 <div id="live-otel-section"></div>
+<div id="aic-section"></div>
 <div class="charts-grid" id="charts-grid">
-  <div class="chart-card"><h3>By Model</h3><canvas id="modelChart"></canvas></div>
-  <div class="chart-card"><h3>All Projects by Tokens</h3><div style="overflow-y:auto" id="projectChartWrap"><canvas id="projectChart"></canvas></div></div>
-  <div class="chart-card"><h3>All Tools</h3><div style="overflow-y:auto" id="toolChartWrap"><canvas id="toolChart"></canvas></div></div>
+  <div class="chart-card"><h3>By Model</h3><div class="chart-frame chart-frame-pie"><canvas id="modelChart"></canvas></div></div>
+  <div class="chart-card"><h3>All Projects by Tokens</h3><div class="chart-scroll"><div class="chart-tall" id="projectChartFrame"><canvas id="projectChart"></canvas></div></div></div>
+  <div class="chart-card"><h3>All Tools</h3><div class="chart-scroll"><div class="chart-tall" id="toolChartFrame"><canvas id="toolChart"></canvas></div></div></div>
   <div id="subagent-section"></div>
 </div>
 <div id="sessions-section"></div>
 <div id="model-section"></div>
-<div class="chart-card" style="margin-bottom:16px"><h3>Daily Token Usage</h3><canvas id="dailyChart"></canvas></div>
-<div class="chart-card" style="margin-bottom:16px"><div style="display:flex;align-items:center"><h3 style="flex:1" id="hourlyTitle">Average Hourly Distribution</h3><div class="tz-toggle"><button class="tz-btn active" onclick="setTz(this,'local')">Local</button><button class="tz-btn" onclick="setTz(this,'utc')">UTC</button></div></div><canvas id="hourlyChart"></canvas></div>
+<div class="chart-card" style="margin-bottom:16px"><h3>Daily Token Usage</h3><div class="chart-frame chart-frame-wide"><canvas id="dailyChart"></canvas></div></div>
+<div class="chart-card" style="margin-bottom:16px"><div style="display:flex;align-items:center"><h3 style="flex:1" id="hourlyTitle">Average Hourly Distribution</h3><div class="tz-toggle"><button class="tz-btn active" onclick="setTz(this,'local')">Local</button><button class="tz-btn" onclick="setTz(this,'utc')">UTC</button></div></div><div class="chart-frame chart-frame-wide"><canvas id="hourlyChart"></canvas></div></div>
 <div class="note" style="margin-top:16px;text-align:center;">
   Token counts come from VS Code chatSessions files. Live OTel adds request, prompt, output, and cache-read token visibility.
 </div>
@@ -221,6 +234,8 @@ let selectedModels = _saved.selectedModels ? new Set(_saved.selectedModels.filte
 let selectedRefresh = typeof _saved.selectedRefresh === 'number' ? _saved.selectedRefresh : 120;
 let selectedTz = _saved.selectedTz || 'local';
 let charts = {};
+let renderPending = false;
+let renderWhenVisible = false;
 function _saveState() { vscode.setState({ selectedRange, selectedRefresh, selectedModels: Array.from(selectedModels), selectedTz }); }
 
 function fmt(n) {
@@ -282,9 +297,9 @@ function buildFilterBar() {
   h += '<button class="btn-refresh" onclick="manualRefresh(this)" title="Refresh now">&#x21bb;</button>';
   document.getElementById('filter-bar').innerHTML = h;
 }
-function toggleModel(cb) { if(cb.checked) selectedModels.add(cb.dataset.model); else selectedModels.delete(cb.dataset.model); _saveState(); render(); }
-function pickAll() { DATA.allModels.forEach(m=>selectedModels.add(m)); document.querySelectorAll('#filter-bar input').forEach(c=>c.checked=true); _saveState(); render(); }
-function pickNone() { selectedModels.clear(); document.querySelectorAll('#filter-bar input').forEach(c=>c.checked=false); _saveState(); render(); }
+function toggleModel(cb) { if(cb.checked) selectedModels.add(cb.dataset.model); else selectedModels.delete(cb.dataset.model); _saveState(); queueRender(); }
+function pickAll() { DATA.allModels.forEach(m=>selectedModels.add(m)); document.querySelectorAll('#filter-bar input').forEach(c=>c.checked=true); _saveState(); queueRender(); }
+function pickNone() { selectedModels.clear(); document.querySelectorAll('#filter-bar input').forEach(c=>c.checked=false); _saveState(); queueRender(); }
 function setRange(btn, r) {
   selectedRange=r;
   btn.closest('.range-btns').querySelectorAll('.range-btn').forEach(b=>b.classList.remove('active'));
@@ -302,16 +317,34 @@ function setRange(btn, r) {
     vscode.postMessage({type:'refreshRate',intervalMs:120000});
     updateRefreshButtons();
   }
-  render();
+  queueRender();
 }
 function updateRefreshButtons() {
   document.querySelectorAll('.refresh-btns .range-btn').forEach(b => {
     b.classList.toggle('active', parseInt(b.dataset.refreshVal||'-1') === selectedRefresh);
   });
 }
-function setTz(btn, tz) { selectedTz=tz; btn.closest('.tz-toggle').querySelectorAll('.tz-btn').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); _saveState(); render(); }
+function setTz(btn, tz) { selectedTz=tz; btn.closest('.tz-toggle').querySelectorAll('.tz-btn').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); _saveState(); queueRender(); }
 function setRefresh(btn, secs) { selectedRefresh=secs; btn.closest('.refresh-btns').querySelectorAll('.range-btn').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); _saveState(); vscode.postMessage({type:'refreshRate',intervalMs:secs*1000}); }
 function manualRefresh(btn) { vscode.postMessage({type:'manualRefresh'}); }
+
+function queueRender() {
+  if (document.hidden) {
+    renderWhenVisible = true;
+    return;
+  }
+  if (renderPending) return;
+  renderPending = true;
+  requestAnimationFrame(() => {
+    renderPending = false;
+    render();
+    requestAnimationFrame(resizeCharts);
+  });
+}
+
+function resizeCharts() {
+  Object.values(charts).forEach(c => { if (c) c.resize(); });
+}
 
 function render() {
   const bounds = getRangeBounds(selectedRange);
@@ -335,6 +368,9 @@ function render() {
   const rl = RANGE_LABELS[selectedRange] || selectedRange;
   const refreshStatus = selectedRefresh > 0 ? '' : ' (auto-refresh off)';
   document.getElementById('subtitle').textContent = 'Updated: '+DATA.generatedAt+' — '+rl+refreshStatus;
+  const aicTotal = DATA.aicSummary ? DATA.aicSummary.totalCredits.toFixed(1) : '0';
+  const aicBudget = DATA.aicSummary ? DATA.aicSummary.monthlyBudget : 0;
+  const aicSub = aicBudget > 0 ? aicTotal+'/'+aicBudget+' credits' : 'no budget set';
   document.getElementById('stats-row').innerHTML = [
     {l:'Sessions',v:t.sessions,s:rl.toLowerCase()},
     {l:'Turns',v:t.turns,s:rl},
@@ -342,12 +378,13 @@ function render() {
     {l:'Output Tokens',v:fmt(t.output),s:'generated tokens'},
     {l:'Tool Calls',v:fmt(t.tools),s:'all tool invocations'},
     {l:'Subagent Calls',v:t.subs,s:'runSubagent only'},
-    {l:'Est. Premium',v:Math.round(t.premium),s:'multiplier estimate',c:'orange'},
+    {l:'AI Credits',v:aicTotal,s:aicSub,c:'orange'},
     {l:'Mirrors',v:DATA.scanStats.mirroredSessions,s:DATA.scanStats.mirrorCopiesPruned+' pruned'},
     {l:'Transcripts',v:DATA.scanStats.transcriptsFound,s:DATA.scanStats.promptPreviews+' with previews'},
   ].map(c=>'<div class="stat-card"><div class="label">'+c.l+'</div><div class="value'+(c.c?' '+c.c:'')+'">'+c.v+'</div><div class="sub">'+c.s+'</div></div>').join('');
 
   renderOtel(DATA.liveOtel);
+  renderAIC(DATA.aicSummary);
   renderDaily(daily);
   renderModelPie(sessions);
   renderProjectBar(sessions);
@@ -380,7 +417,214 @@ function renderOtel(live) {
     +'<table><thead><tr><th>Model</th><th class="num">Requests</th><th class="num">Prompt</th><th class="num">Output</th><th class="num">Trace Cache</th><th class="num">Metric Cache</th><th class="num">Effective Cache</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
 }
 
-function dc(k) { if(charts[k]) { charts[k].destroy(); charts[k]=null; } }
+/**
+ * Build a calendar grid showing daily AI Credits for the current billing cycle.
+ * Each cell is color-coded by intensity. Shows the full month with
+ * day-of-week headers (Mon-Sun).
+ */
+function buildCreditCalendar(cycleStart, cycleEnd, dayMap) {
+  // Determine the month to display (from billing cycle start)
+  const startDate = new Date(cycleStart + 'T00:00:00');
+  const year = startDate.getFullYear();
+  const month = startDate.getMonth();
+  const monthName = startDate.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+
+  // Get first day of month and total days
+  const firstOfMonth = new Date(year, month, 1);
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const startDow = (firstOfMonth.getDay() + 6) % 7; // Monday=0
+
+  // Collect credits for this month and find max for color scaling
+  const monthCredits = [];
+  let maxCredits = 0;
+  let totalMonth = 0;
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateStr = year + '-' + String(month + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+    const cr = dayMap[dateStr] || 0;
+    monthCredits.push({ day: d, date: dateStr, credits: cr });
+    if (cr > maxCredits) { maxCredits = cr; }
+    totalMonth += cr;
+  }
+
+  // Today marker
+  const todayStr = new Date().toISOString().slice(0, 10);
+
+  // Build grid: 7 columns (Mon-Sun), enough rows for the month
+  const dayHeaders = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  let headerRow = '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-bottom:4px">';
+  dayHeaders.forEach(dh => {
+    headerRow += '<div style="text-align:center;font-size:9px;color:var(--muted);font-weight:600">'+dh+'</div>';
+  });
+  headerRow += '</div>';
+
+  let gridCells = '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px">';
+
+  // Empty cells before first day
+  for (let i = 0; i < startDow; i++) {
+    gridCells += '<div style="aspect-ratio:1;border-radius:4px"></div>';
+  }
+
+  // Day cells
+  for (let i = 0; i < daysInMonth; i++) {
+    const mc = monthCredits[i];
+    const intensity = maxCredits > 0 ? mc.credits / maxCredits : 0;
+    const isToday = mc.date === todayStr;
+    const isFuture = mc.date > todayStr;
+
+    // Color: green gradient for usage intensity, gray for zero, dimmed for future
+    let bg, border, textColor;
+    if (isFuture) {
+      bg = 'var(--border)';
+      border = 'none';
+      textColor = 'var(--muted)';
+    } else if (mc.credits === 0) {
+      bg = 'rgba(255,255,255,0.03)';
+      border = '1px solid var(--border)';
+      textColor = 'var(--muted)';
+    } else if (intensity > 0.8) {
+      bg = 'rgba(255,69,58,0.7)';
+      border = '1px solid rgba(255,69,58,0.9)';
+      textColor = '#fff';
+    } else if (intensity > 0.5) {
+      bg = 'rgba(255,159,10,0.6)';
+      border = '1px solid rgba(255,159,10,0.8)';
+      textColor = '#fff';
+    } else if (intensity > 0.2) {
+      bg = 'rgba(48,209,88,0.5)';
+      border = '1px solid rgba(48,209,88,0.7)';
+      textColor = '#fff';
+    } else {
+      bg = 'rgba(48,209,88,0.2)';
+      border = '1px solid rgba(48,209,88,0.4)';
+      textColor = 'var(--fg)';
+    }
+
+    const todayOutline = isToday ? ';outline:2px solid var(--blue);outline-offset:-1px' : '';
+    const tooltip = mc.date + ': ' + mc.credits.toFixed(1) + ' credits';
+    const creditsLabel = mc.credits > 0 ? '<div style="font-size:8px;color:'+textColor+';opacity:0.9">'+mc.credits.toFixed(0)+'</div>' : '';
+
+    gridCells += '<div title="'+tooltip+'" style="aspect-ratio:1;border-radius:4px;background:'+bg+';border:'+border+';display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:default'+todayOutline+'">'
+      + '<div style="font-size:10px;font-weight:600;color:'+textColor+'">'+mc.day+'</div>'
+      + creditsLabel
+      + '</div>';
+  }
+
+  gridCells += '</div>';
+
+  // Legend
+  const legend = '<div style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:9px;color:var(--muted)">'
+    + '<span>Less</span>'
+    + '<div style="width:10px;height:10px;border-radius:2px;background:rgba(48,209,88,0.2)"></div>'
+    + '<div style="width:10px;height:10px;border-radius:2px;background:rgba(48,209,88,0.5)"></div>'
+    + '<div style="width:10px;height:10px;border-radius:2px;background:rgba(255,159,10,0.6)"></div>'
+    + '<div style="width:10px;height:10px;border-radius:2px;background:rgba(255,69,58,0.7)"></div>'
+    + '<span>More</span>'
+    + '<span style="margin-left:auto">Month total: <strong style="color:var(--orange)">'+totalMonth.toFixed(1)+'</strong> credits</span>'
+    + '</div>';
+
+  return '<div class="section-title" style="margin-bottom:6px">Daily Credits — '+monthName+'</div>'
+    + headerRow + gridCells + legend;
+}
+
+function renderAIC(aic) {
+  const el = document.getElementById('aic-section');
+  if (!aic || aic.totalCredits === 0) {
+    el.innerHTML = '<div class="table-card"><div class="section-head"><div class="section-title">AI Credits (AIC)</div><div class="section-subtitle">No usage data yet</div></div><div class="empty-panel">AI Credits will be calculated once token usage data is available. Configure your plan in Settings → Copilot Usage.</div></div>';
+    return;
+  }
+
+  const pct = aic.monthlyBudget > 0 ? Math.min(100, Math.round((aic.totalCredits / aic.monthlyBudget) * 100)) : 0;
+  const barColor = pct >= 90 ? 'var(--red)' : pct >= 70 ? 'var(--orange)' : 'var(--green)';
+  const projPct = aic.monthlyBudget > 0 ? Math.round((aic.projectedTotal / aic.monthlyBudget) * 100) : 0;
+  const projColor = projPct >= 100 ? 'var(--red)' : projPct >= 80 ? 'var(--orange)' : 'var(--green)';
+
+  // Promo info
+  const promo = aic.promo || {};
+  const isPromo = promo.isPromoActive && promo.promoBudget > 0;
+  const planLabel = aic.planName.charAt(0).toUpperCase() + aic.planName.slice(1).replace('_', ' ');
+  const promoTag = isPromo ? ' <span style="color:var(--green);font-size:11px;font-weight:600">⚡ PROMO (until '+promo.promoEndDate+')</span>' : '';
+
+  // Budget progress bar
+  const budgetBar = aic.monthlyBudget > 0
+    ? '<div style="margin:12px 0"><div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:4px"><span>'+aic.totalCredits.toFixed(1)+' / '+aic.monthlyBudget+' credits used'+( isPromo ? ' (promo)' : '')+'</span><span>'+pct+'%</span></div><div style="background:var(--border);border-radius:4px;height:8px;overflow:hidden"><div style="width:'+pct+'%;height:100%;background:'+barColor+';border-radius:4px;transition:width 0.3s"></div></div></div>'
+    : '';
+
+  // Stats row
+  const statsCards = [
+    {l:'Total Credits',v:aic.totalCredits.toFixed(1),s:planLabel+' plan',c:'orange'},
+    {l:'Input Credits',v:aic.inputCredits.toFixed(1),s:'prompt tokens'},
+    {l:'Output Credits',v:aic.outputCredits.toFixed(1),s:'completion tokens'},
+    {l:'Cache Savings',v:aic.cachedCredits.toFixed(1),s:'discounted cached'},
+    {l:'Remaining',v:aic.creditsRemaining >= 0 ? aic.creditsRemaining.toFixed(1) : '∞',s:aic.daysRemaining+' days left',c:aic.creditsRemaining >= 0 && aic.creditsRemaining < 100 ? 'red' : ''},
+    {l:'Daily Avg',v:aic.dailyAverage.toFixed(1),s:'credits/day'},
+    {l:'Projected',v:aic.projectedTotal.toFixed(0),s:'end of cycle',c:projPct>=100?'red':projPct>=80?'orange':''},
+  ];
+
+  // Overage card(s): show both with and without promo during promo period
+  let overageHTML = '';
+  if (isPromo) {
+    overageHTML = '<div class="stats-row" style="margin-top:8px">'
+      + '<div class="stat-card" style="border-left:3px solid var(--green)"><div class="label">Overage (With Promo)</div><div class="value'+(promo.overageWithPromo > 0?' red':'')+'">$'+promo.overageWithPromo.toFixed(2)+'</div><div class="sub">budget: '+promo.promoBudget+' credits</div></div>'
+      + '<div class="stat-card" style="border-left:3px solid var(--orange)"><div class="label">Overage (Without Promo)</div><div class="value'+(promo.overageWithoutPromo > 0?' red':'')+'">$'+promo.overageWithoutPromo.toFixed(2)+'</div><div class="sub">standard: '+promo.standardBudget+' credits</div></div>'
+      + '<div class="stat-card" style="border-left:3px solid var(--green)"><div class="label">Promo Savings</div><div class="value green">$'+(promo.overageWithoutPromo - promo.overageWithPromo).toFixed(2)+'</div><div class="sub">ends '+promo.promoEndDate+'</div></div>'
+      + '</div>';
+  } else {
+    overageHTML = '<div class="stats-row" style="margin-top:8px">'
+      + '<div class="stat-card"><div class="label">Overage Cost</div><div class="value'+(aic.estimatedOverageCost > 0?' red':'')+'">$'+aic.estimatedOverageCost.toFixed(2)+'</div><div class="sub">@ $'+aic.config.overageCostPerCredit+'/credit</div></div>'
+      + '</div>';
+  }
+
+  // Model breakdown table
+  let modelRows = '';
+  (aic.byModel||[]).forEach(m => {
+    const tierBadge = m.tier === 'premium' ? '<span class="mult-badge mult-high">premium</span>' : m.tier === 'base' ? '<span class="mult-badge mult-1">base</span>' : '<span class="mult-badge">custom</span>';
+    modelRows += '<tr><td><span class="model-tag '+mc(m.model)+'">'+esc(m.model)+'</span> '+tierBadge+'</td><td class="num">'+m.inputCredits.toFixed(2)+'</td><td class="num">'+m.outputCredits.toFixed(2)+'</td><td class="num cached">'+m.cachedCredits.toFixed(2)+'</td><td class="num orange">'+m.totalCredits.toFixed(2)+'</td></tr>';
+  });
+
+  // Daily credits calendar for current billing month
+  const dayMap = {};
+  (aic.byDay||[]).forEach(d => { dayMap[d.day] = d.credits; });
+  const calendarHTML = buildCreditCalendar(aic.billingCycleStart, aic.billingCycleEnd, dayMap);
+
+  // Estimation note
+  const cacheNote = aic.cachedCredits === 0
+    ? '<div style="margin-top:8px;padding:6px 10px;background:var(--border);border-radius:4px;font-size:10px;color:var(--muted)">⚠️ <strong>Upper-bound estimate:</strong> Cache savings cannot be detected from session logs. Actual credits consumed may be lower if cached input tokens were used. Check GitHub billing for exact usage.</div>'
+    : '';
+
+  el.innerHTML = '<div class="table-card"><div class="section-head"><div class="section-title">AI Credits (AIC) — Usage-Based Billing'+promoTag+'</div><div class="section-subtitle">Cycle: '+esc(aic.billingCycleStart)+' to '+esc(aic.billingCycleEnd)+' • '+planLabel+' Plan</div></div>'
+    + budgetBar
+    + '<div class="stats-row">' + statsCards.map(c=>'<div class="stat-card"><div class="label">'+c.l+'</div><div class="value'+(c.c?' '+c.c:'')+'">'+c.v+'</div><div class="sub">'+c.s+'</div></div>').join('') + '</div>'
+    + overageHTML
+    + cacheNote
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px">'
+    + '<div><div class="section-title" style="margin-bottom:8px">Credits by Model</div><table><thead><tr><th>Model</th><th class="num">Input</th><th class="num">Output</th><th class="num">Cached</th><th class="num">Total</th></tr></thead><tbody>'+modelRows+'</tbody></table></div>'
+    + '<div>'+calendarHTML+'</div>'
+    + '</div></div>';
+}
+
+function dc(k) {
+  if(charts[k]) {
+    const canvas = charts[k].canvas;
+    charts[k].destroy();
+    if (canvas) {
+      canvas.removeAttribute('width');
+      canvas.removeAttribute('height');
+      canvas.style.removeProperty('width');
+      canvas.style.removeProperty('height');
+    }
+    charts[k]=null;
+  }
+}
+
+function sizeScrollableChart(frameId, height) {
+  const frame = document.getElementById(frameId);
+  if (!frame) return null;
+  const canvas = frame.querySelector('canvas');
+  if (!canvas) return null;
+  const displayHeight = Math.max(300, Math.min(height, 900));
+  frame.style.height = displayHeight+'px';
+  return canvas;
+}
 
 function renderDaily(daily) {
   dc('daily');
@@ -393,7 +637,7 @@ function renderDaily(daily) {
       {label:'Prompt',data:days.map(d=>pMap[d]),backgroundColor:tc('chart-bar1'),stack:'tokens',yAxisID:'y'},
       {label:'Output',data:days.map(d=>oMap[d]),backgroundColor:tc('chart-bar2'),stack:'tokens',yAxisID:'y'}
     ]},
-    options:{responsive:true, plugins:{legend:{labels:{color:tc('muted')}}}, scales:{
+    options:{responsive:true,maintainAspectRatio:false, plugins:{legend:{labels:{color:tc('muted')}}}, scales:{
       x:{stacked:true,ticks:{color:tc('muted'),maxRotation:45},grid:{color:tc('grid')}},
       y:{position:'left',stacked:true,ticks:{color:tc('blue'),callback:v=>fmt(v)},grid:{color:tc('grid')},title:{display:true,text:'Tokens',color:tc('blue')}}
     }}
@@ -407,7 +651,7 @@ function renderModelPie(sessions) {
   const sorted=Object.entries(m).sort((a,b)=>b[1]-a[1]);
   charts.model = new Chart(document.getElementById('modelChart'), {
     type:'doughnut', data:{labels:sorted.map(e=>e[0]),datasets:[{data:sorted.map(e=>e[1]),backgroundColor:MODEL_COLORS.slice(0,sorted.length)}]},
-    options:{responsive:true,maintainAspectRatio:true,aspectRatio:1.3,plugins:{legend:{position:'bottom',labels:{color:tc('muted')}}}}
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{color:tc('muted')}}}}
   });
 }
 
@@ -418,14 +662,14 @@ function renderProjectBar(sessions) {
   const sorted=Object.entries(pm).map(([k,v])=>[k,v+(om[k]||0)]).sort((a,b)=>b[1]-a[1]);
   const labels=sorted.map(e=>e[0]);
   const pH=Math.max(300, sorted.length*28);
-  const wrap=document.getElementById('projectChartWrap');
-  if(wrap){wrap.style.maxHeight='500px';wrap.querySelector('canvas').style.height=pH+'px';wrap.querySelector('canvas').style.width='100%';}
-  charts.project = new Chart(document.getElementById('projectChart'), {
+  const canvas = sizeScrollableChart('projectChartFrame', pH);
+  if(!canvas) return;
+  charts.project = new Chart(canvas, {
     type:'bar', data:{labels, datasets:[
       {label:'Prompt',data:labels.map(l=>pm[l]||0),backgroundColor:tc('chart-bar1')},
       {label:'Output',data:labels.map(l=>om[l]||0),backgroundColor:tc('chart-bar2')}
     ]},
-    options:{indexAxis:'y',responsive:false,maintainAspectRatio:false,plugins:{legend:{labels:{color:tc('muted')}}},scales:{
+    options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:tc('muted')}}},scales:{
       x:{stacked:true,ticks:{color:tc('muted'),callback:v=>fmt(v)},grid:{color:tc('grid')}},
       y:{stacked:true,ticks:{color:tc('muted'),font:{size:10}},grid:{color:tc('grid')}}
     }}
@@ -438,11 +682,11 @@ function renderToolBar(tools) {
   tools.forEach(t=>{m[t.toolName]=(m[t.toolName]||0)+t.count;});
   const sorted=Object.entries(m).sort((a,b)=>b[1]-a[1]);
   const tH=Math.max(300, sorted.length*28);
-  const tWrap=document.getElementById('toolChartWrap');
-  if(tWrap){tWrap.style.maxHeight='500px';tWrap.querySelector('canvas').style.height=tH+'px';tWrap.querySelector('canvas').style.width='100%';}
-  charts.tool = new Chart(document.getElementById('toolChart'), {
+  const canvas = sizeScrollableChart('toolChartFrame', tH);
+  if(!canvas) return;
+  charts.tool = new Chart(canvas, {
     type:'bar', data:{labels:sorted.map(e=>e[0]),datasets:[{label:'Calls',data:sorted.map(e=>e[1]),backgroundColor:tc('chart-bar1')}]},
-    options:{indexAxis:'y',responsive:false,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{
+    options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{
       x:{ticks:{color:tc('muted')},grid:{color:tc('grid')}},
       y:{ticks:{color:tc('muted'),font:{size:10}},grid:{color:tc('grid')}}
     }}
@@ -464,9 +708,9 @@ function renderSessions(sessions, subs) {
     const fl=(s.sourcePaths||[]).map((p,i)=>'<span class="file-link" data-path="'+esc(p)+'" title="'+esc(p)+'">log '+(i+1)+'</span>').join('')
       +(s.transcriptPaths||[]).map((p,i)=>'<span class="file-link" data-path="'+esc(p)+'" title="'+esc(p)+'">transcript '+(i+1)+'</span>').join('');
     const flDiv=fl?'<div class="file-links">'+fl+'</div>':'';
-    rows+='<tr><td style="font-family:monospace;font-size:11px">'+esc(s.sessionShort)+'...</td><td>'+esc(s.project)+'</td><td>'+sum+'</td><td style="font-size:11px">'+esc(s.last)+'</td><td class="num">'+s.durationMin+'m</td><td><span class="model-tag '+mc(s.modelName)+'">'+esc(s.modelName)+'</span>'+mbadge(mult)+'</td><td class="num">'+s.turns+'</td><td class="num">'+fmt(s.actualPrompt||s.prompt)+'</td><td class="num">'+fmt(s.actualOutput||s.output)+'</td><td class="num">'+fmt(s.toolCalls)+'</td><td class="num">'+(s.subagents||'')+(sd?' '+sd:'')+'</td><td>'+flDiv+'</td></tr>';
+    rows+='<tr><td style="font-family:monospace;font-size:11px">'+esc(s.sessionShort)+'...</td><td>'+esc(s.project)+'</td><td>'+sum+'</td><td style="font-size:11px">'+esc(s.last)+'</td><td class="num">'+s.durationMin+'m</td><td><span class="model-tag '+mc(s.modelName)+'">'+esc(s.modelName)+'</span>'+mbadge(mult)+'</td><td class="num">'+s.turns+'</td><td class="num">'+fmt(s.actualPrompt||s.prompt)+'</td><td class="num">'+fmt(s.actualOutput||s.output)+'</td><td class="num">'+fmt(s.toolCalls)+'</td><td class="num">'+(s.subagents||'')+(sd?' '+sd:'')+'</td><td class="num">'+(s.aicCredits?s.aicCredits.toFixed(1):'—')+'</td><td>'+flDiv+'</td></tr>';
   });
-  el.innerHTML='<div class="table-card"><div class="section-title">All Sessions &mdash; '+sessions.length+' shown</div><div class="sessions-scroll"><table><thead><tr><th>Session</th><th>Project</th><th>Summary</th><th>Last Active</th><th class="num">Duration</th><th>Model</th><th class="num">Turns</th><th class="num">Prompt</th><th class="num">Output</th><th class="num">Tools</th><th class="num">Subagents</th><th>Files</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+  el.innerHTML='<div class="table-card"><div class="section-title">All Sessions &mdash; '+sessions.length+' shown</div><div class="sessions-scroll"><table><thead><tr><th>Session</th><th>Project</th><th>Summary</th><th>Last Active</th><th class="num">Duration</th><th>Model</th><th class="num">Turns</th><th class="num">Prompt</th><th class="num">Output</th><th class="num">Tools</th><th class="num">Subagents</th><th class="num">AI Credits</th><th>Files</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
   el.querySelectorAll('.file-link[data-path]').forEach(link => {
     link.addEventListener('click', () => { vscode.postMessage({type:'openFile',path:link.dataset.path}); });
   });
@@ -481,11 +725,20 @@ function renderModelTable(sessions) {
     m[k].sessions.add(s.sessionId);m[k].turns+=s.turns;m[k].prompt+=(s.actualPrompt||s.prompt);m[k].output+=(s.actualOutput||s.output);m[k].tools+=s.toolCalls;m[k].subs+=s.subagents;
   });
   const sorted=Object.values(m).sort((a,b)=>(b.prompt+b.output)-(a.prompt+a.output));
+  // Get AIC credits per model from summary
+  const aicByModel = {};
+  if (DATA.aicSummary && DATA.aicSummary.byModel) {
+    DATA.aicSummary.byModel.forEach(am => { aicByModel[am.model.toLowerCase()] = am; });
+  }
   let rows='';
   sorted.forEach(m=>{
-    rows+='<tr><td><span class="model-tag '+mc(m.model)+'">'+esc(m.model)+'</span></td><td class="num">'+m.mult+'x</td><td class="num">'+m.sessions.size+'</td><td class="num">'+m.turns+'</td><td class="num">'+fmt(m.prompt)+'</td><td class="num">'+fmt(m.output)+'</td><td class="num">'+fmt(m.tools)+'</td><td class="num">'+m.subs+'</td><td class="num orange">'+Math.round(m.mult*m.turns)+'</td></tr>';
+    const aicModel = aicByModel[m.model.toLowerCase()] || null;
+    const credits = aicModel ? aicModel.totalCredits.toFixed(2) : '—';
+    const tier = aicModel ? aicModel.tier : '';
+    const tierBadge = tier === 'premium' ? ' <span class="mult-badge mult-high">P</span>' : tier === 'base' ? ' <span class="mult-badge mult-1">B</span>' : '';
+    rows+='<tr><td><span class="model-tag '+mc(m.model)+'">'+esc(m.model)+'</span>'+tierBadge+'</td><td class="num">'+m.mult+'x</td><td class="num">'+m.sessions.size+'</td><td class="num">'+m.turns+'</td><td class="num">'+fmt(m.prompt)+'</td><td class="num">'+fmt(m.output)+'</td><td class="num">'+fmt(m.tools)+'</td><td class="num">'+m.subs+'</td><td class="num orange">'+credits+'</td></tr>';
   });
-  el.innerHTML='<div class="table-card"><div class="section-title">Usage by Model</div><table><thead><tr><th>Model</th><th class="num">Multiplier</th><th class="num">Sessions</th><th class="num">Turns</th><th class="num">Prompt</th><th class="num">Output</th><th class="num">Tools</th><th class="num">Subagents</th><th class="num">Est. Premium</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+  el.innerHTML='<div class="table-card"><div class="section-title">Usage by Model</div><table><thead><tr><th>Model</th><th class="num">Multiplier</th><th class="num">Sessions</th><th class="num">Turns</th><th class="num">Prompt</th><th class="num">Output</th><th class="num">Tools</th><th class="num">Subagents</th><th class="num">AI Credits</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
 }
 
 function renderSubagents(subs) {
@@ -545,7 +798,7 @@ function renderHourly(turns) {
       {label:'Avg Turns',data:avgTurns,backgroundColor:barColors,yAxisID:'y',order:2},
       {label:'Avg Output Tokens',data:avgOutput,type:'line',borderColor:tc('purple'),backgroundColor:tc('chart-bar2'),pointBackgroundColor:tc('purple'),pointRadius:3,yAxisID:'y1',tension:0.3,order:1}
     ]},
-    options:{responsive:true,plugins:{
+    options:{responsive:true,maintainAspectRatio:false,plugins:{
       legend:{labels:{color:tc('muted')}},
       tooltip:{callbacks:{afterLabel:function(ctx){if(ctx.datasetIndex===0 && isPeakHour(ctx.dataIndex))return 'Peak — Anthropic US hours';return '';}}}
     },scales:{
@@ -557,7 +810,18 @@ function renderHourly(turns) {
 }
 
 buildFilterBar();
-render();
+queueRender();
+
+window.addEventListener('resize', () => { requestAnimationFrame(resizeCharts); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  if (renderWhenVisible) {
+    renderWhenVisible = false;
+    queueRender();
+  } else {
+    requestAnimationFrame(resizeCharts);
+  }
+});
 
 window.addEventListener('message', e => {
   const msg = e.data;
@@ -568,7 +832,7 @@ window.addEventListener('message', e => {
     selectedModels.forEach(m => { if (!newModels.has(m)) selectedModels.delete(m); });
     DATA.allModels.forEach(m => { if (!selectedModels.has(m)) selectedModels.add(m); });
     buildFilterBar();
-    render();
+    queueRender();
   }
 });
 <\/script>

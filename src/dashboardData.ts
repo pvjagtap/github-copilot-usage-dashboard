@@ -5,6 +5,14 @@
 
 import { ScanResult, Session, Turn, ToolCall, Subagent, ScanStats } from "./scanner";
 import { LiveStats } from "./otelReceiver";
+import { AICCalculator, AICConfig, CreditSummary, DEFAULT_AIC_CONFIG, createCalculatorFromConfig, getPromoInfo } from "./aicCredits";
+
+/**
+ * AIC billing effective date. Only sessions/turns on or after this date
+ * are included in AI Credit calculations.
+ * GitHub Copilot usage-based billing started June 1, 2026.
+ */
+const AIC_EFFECTIVE_DATE = "2026-06-01";
 
 // ─── Dashboard Data Types ─────────────────────────────────────
 
@@ -67,6 +75,8 @@ export interface SessionView {
   subagents: number;
   sourcePaths: string[];
   transcriptPaths: string[];
+  /** AI Credits consumed by this session (0 if before AIC effective date) */
+  aicCredits: number;
 }
 
 export interface DashboardData {
@@ -79,6 +89,59 @@ export interface DashboardData {
   liveOtel: LiveOtelData;
   scanStats: ScanStats;
   generatedAt: string;
+  /** AI Credits (AIC) usage summary — configurable per-model cost tracking */
+  aicSummary: AICDashboardData;
+  /** AI Credits for the most recent (current) session */
+  currentSessionAIC: number;
+}
+
+/** Serializable AIC data for the webview */
+export interface AICDashboardData {
+  totalCredits: number;
+  inputCredits: number;
+  outputCredits: number;
+  cachedCredits: number;
+  planName: string;
+  monthlyBudget: number;
+  creditsRemaining: number;
+  estimatedOverageCost: number;
+  billingCycleStart: string;
+  billingCycleEnd: string;
+  daysRemaining: number;
+  dailyAverage: number;
+  projectedTotal: number;
+  /** Per-model credit breakdown */
+  byModel: Array<{
+    model: string;
+    tier: string;
+    inputCredits: number;
+    outputCredits: number;
+    cachedCredits: number;
+    totalCredits: number;
+  }>;
+  /** Per-day credit totals */
+  byDay: Array<{ day: string; credits: number }>;
+  /** Current AIC configuration for display */
+  config: AICConfig;
+  /** Promotional period info */
+  promo: {
+    /** Whether we are currently in the promo window (June 1 – Sept 1, 2026) */
+    isPromoActive: boolean;
+    /** Promo budget (3000 for Business, 7000 for Enterprise) — 0 if not applicable */
+    promoBudget: number;
+    /** Standard (non-promo) budget */
+    standardBudget: number;
+    /** Overage cost WITHOUT promo (against standard budget) */
+    overageWithoutPromo: number;
+    /** Overage cost WITH promo (against promo budget) */
+    overageWithPromo: number;
+    /** Credits remaining under promo budget */
+    creditsRemainingPromo: number;
+    /** Credits remaining under standard budget */
+    creditsRemainingStandard: number;
+    /** Promo period end date */
+    promoEndDate: string;
+  };
 }
 
 export interface LiveOtelData {
@@ -147,11 +210,23 @@ function computeSubagents(subagents: Subagent[]): SubagentRow[] {
   return Array.from(map.values()).sort((a, b) => b.count - a.count);
 }
 
-function computeSessionViews(sessions: Session[], toolCalls: ToolCall[]): SessionView[] {
+function computeSessionViews(sessions: Session[], toolCalls: ToolCall[], turns: Turn[], calculator: AICCalculator): SessionView[] {
   // Tool call counts per session
   const toolCountMap = new Map<string, number>();
   for (const tc of toolCalls) {
     toolCountMap.set(tc.sessionId, (toolCountMap.get(tc.sessionId) ?? 0) + 1);
+  }
+
+  // Per-session AIC credits (only for turns on/after AIC_EFFECTIVE_DATE)
+  const sessionCreditsMap = new Map<string, number>();
+  for (const t of turns) {
+    if (!t.timestamp) { continue; }
+    const date = t.timestamp.slice(0, 10);
+    if (date < AIC_EFFECTIVE_DATE) { continue; }
+    const inputTokens = t.debugPromptTokens || t.promptTokens;
+    const outputTokens = t.debugOutputTokens || t.outputTokens;
+    const usage = calculator.calculateCredits(t.modelFamily || "unknown", inputTokens, outputTokens, 0);
+    sessionCreditsMap.set(t.sessionId, (sessionCreditsMap.get(t.sessionId) ?? 0) + usage.totalCredits);
   }
 
   return sessions.map(s => {
@@ -190,6 +265,7 @@ function computeSessionViews(sessions: Session[], toolCalls: ToolCall[]): Sessio
       subagents: s.subagentCalls,
       sourcePaths: s.sourcePaths || [],
       transcriptPaths: s.transcriptPaths || [],
+      aicCredits: Math.round((sessionCreditsMap.get(s.sessionId) ?? 0) * 100) / 100,
     };
   });
 }
@@ -209,10 +285,14 @@ function computeAllModels(turns: Turn[]): string[] {
 
 // ─── Build Dashboard Data ─────────────────────────────────────
 
-export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null): DashboardData {
+export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null, aicConfig?: AICConfig): DashboardData {
+  // Create AIC calculator early so it can be used in session views
+  const config = aicConfig ?? DEFAULT_AIC_CONFIG;
+  const calculator = createCalculatorFromConfig(config);
+
   const allModels = computeAllModels(scan.turns);
   const dailyByModel = computeDaily(scan.turns);
-  const sessionsAll = computeSessionViews(scan.sessions, scan.toolCalls);
+  const sessionsAll = computeSessionViews(scan.sessions, scan.toolCalls, scan.turns, calculator);
   const toolsAll = computeTools(scan.toolCalls);
   const subagentsAll = computeSubagents(scan.subagents);
 
@@ -252,6 +332,101 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
       output: t.debugOutputTokens || t.outputTokens,
     }));
 
+  // ─── AIC Credit Calculations ──────────────────────────────────
+
+  // Build credit entries from turns (prefer debug-log actuals)
+  // ONLY include turns on or after AIC effective date (June 1, 2026)
+  const creditEntries = scan.turns
+    .filter(t => t.timestamp && t.timestamp.slice(0, 10) >= AIC_EFFECTIVE_DATE)
+    .map(t => ({
+      model: t.modelFamily || "unknown",
+      inputTokens: t.debugPromptTokens || t.promptTokens,
+      outputTokens: t.debugOutputTokens || t.outputTokens,
+      cachedTokens: 0, // cached not available per-turn from chatSession data
+      date: t.timestamp.slice(0, 10),
+    }));
+
+  // Add live OTel data if available (these have cached token info)
+  // Only include if current date is on/after AIC effective date
+  // IMPORTANT: OTel data may overlap with scanner data for the current session.
+  // To avoid double-counting, we only add OTel data if the scanner found NO turns
+  // for today. If scanner already has today's data, it's more complete (has per-turn
+  // granularity) — OTel would just duplicate it without the cached breakdown.
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const scanHasTodayData = creditEntries.some(e => e.date === todayStr);
+  if (liveStats && liveStats.requests > 0 && todayStr >= AIC_EFFECTIVE_DATE && !scanHasTodayData) {
+    for (const m of liveStats.byModel.values()) {
+      creditEntries.push({
+        model: m.model,
+        inputTokens: m.prompt,
+        outputTokens: m.completion,
+        cachedTokens: m.cached,
+        date: new Date().toISOString().slice(0, 10),
+      });
+    }
+  }
+
+  const summary = calculator.computeSummary(creditEntries);
+
+  // Promo detection: auto-detect if we're in the June 1 – Sept 1, 2026 window
+  const promoInfo = getPromoInfo(config.plan, summary.plan.monthlyCreditsIncluded);
+  const totalCr = Math.round(summary.totalCredits * 100) / 100;
+
+  // Compute overage under both promo and standard budgets
+  const overageStandard = Math.max(0, totalCr - promoInfo.standardBudget) * (config.overageCostPerCredit ?? 0.01);
+  const overagePromo = promoInfo.promoBudget > 0
+    ? Math.max(0, totalCr - promoInfo.promoBudget) * (config.overageCostPerCredit ?? 0.01)
+    : 0;
+
+  // If promo is active, use promo budget as the effective budget
+  const effectiveBudget = promoInfo.isPromoActive && promoInfo.promoBudget > 0
+    ? promoInfo.promoBudget
+    : summary.plan.monthlyCreditsIncluded;
+  const effectiveRemaining = Math.max(0, effectiveBudget - totalCr);
+  const effectiveOverage = Math.max(0, totalCr - effectiveBudget) * (config.overageCostPerCredit ?? 0.01);
+
+  const aicSummary: AICDashboardData = {
+    totalCredits: totalCr,
+    inputCredits: Math.round(summary.inputCredits * 100) / 100,
+    outputCredits: Math.round(summary.outputCredits * 100) / 100,
+    cachedCredits: Math.round(summary.cachedCredits * 100) / 100,
+    planName: summary.plan.planName,
+    monthlyBudget: effectiveBudget,
+    creditsRemaining: Math.round(effectiveRemaining * 100) / 100,
+    estimatedOverageCost: Math.round(effectiveOverage * 100) / 100,
+    billingCycleStart: summary.billingCycleStart,
+    billingCycleEnd: summary.billingCycleEnd,
+    daysRemaining: summary.daysRemaining,
+    dailyAverage: Math.round(summary.dailyAverage * 100) / 100,
+    projectedTotal: Math.round(summary.projectedTotal * 100) / 100,
+    byModel: Array.from(summary.byModel.values()).map(m => ({
+      model: m.model,
+      tier: m.tier,
+      inputCredits: Math.round(m.inputCredits * 100) / 100,
+      outputCredits: Math.round(m.outputCredits * 100) / 100,
+      cachedCredits: Math.round(m.cachedCredits * 100) / 100,
+      totalCredits: Math.round(m.totalCredits * 100) / 100,
+    })).sort((a, b) => b.totalCredits - a.totalCredits),
+    byDay: Array.from(summary.byDay.entries())
+      .map(([day, credits]) => ({ day, credits: Math.round(credits * 100) / 100 }))
+      .sort((a, b) => a.day.localeCompare(b.day)),
+    config,
+    promo: {
+      isPromoActive: promoInfo.isPromoActive,
+      promoBudget: promoInfo.promoBudget,
+      standardBudget: promoInfo.standardBudget,
+      overageWithoutPromo: Math.round(overageStandard * 100) / 100,
+      overageWithPromo: Math.round(overagePromo * 100) / 100,
+      creditsRemainingPromo: promoInfo.promoBudget > 0 ? Math.round(Math.max(0, promoInfo.promoBudget - totalCr) * 100) / 100 : 0,
+      creditsRemainingStandard: Math.round(Math.max(0, promoInfo.standardBudget - totalCr) * 100) / 100,
+      promoEndDate: promoInfo.promoEndDate,
+    },
+  };
+
+  // Determine current session AIC (most recent session with activity)
+  const sortedSessions = [...sessionsAll].sort((a, b) => (b.last || "").localeCompare(a.last || ""));
+  const currentSessionAIC = sortedSessions.length > 0 ? sortedSessions[0].aicCredits : 0;
+
   return {
     allModels,
     dailyByModel,
@@ -262,5 +437,7 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
     liveOtel,
     scanStats: scan.stats,
     generatedAt: new Date().toLocaleString('en-CA', { hour12: false, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }).replace(',', ''),
+    aicSummary,
+    currentSessionAIC,
   };
 }
