@@ -14,6 +14,8 @@ let statusBar: StatusBarProvider | undefined;
 let scanTimer: ReturnType<typeof setInterval> | undefined;
 let lastScan: ScanResult | undefined;
 let output: vscode.OutputChannel;
+/** ISO timestamp of when this VS Code instance activated the extension — used to scope "current" to this instance only */
+let activationTime: string;
 
 function getAICConfig(): AICConfig {
   const cfg = vscode.workspace.getConfiguration("copilotUsage.aic");
@@ -45,6 +47,9 @@ async function runScan(): Promise<void> {
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   output = vscode.window.createOutputChannel("Copilot Usage");
   context.subscriptions.push(output);
+
+  // Record activation time — used to scope "current" stats to this VS Code instance
+  activationTime = new Date().toISOString();
 
   // Initial scan of chatSession files
   await runScan();
@@ -192,65 +197,85 @@ function updateStatusBar(): void {
   const scan = lastScan?.stats ?? null;
   const otel = receiver?.getStats() ?? null;
 
-  // Find the most recent session (proxy for "current active session" in this instance)
   let currentSession: CurrentSessionInfo | null = null;
   let currentSessionAIC = 0;
 
-  if (lastScan && lastScan.sessions.length > 0) {
-    const sorted = [...lastScan.sessions].sort((a, b) =>
-      (b.lastTimestamp || "").localeCompare(a.lastTimestamp || "")
-    );
-    const latest = sorted[0];
+  const aicConfig = getAICConfig();
+  const calculator = createCalculatorFromConfig(aicConfig);
+  const AIC_START = "2026-06-01";
 
-    // Compute AIC for this session
-    // Prefer actual API-reported AIC (copilotUsageNanoAiu) over computed from rates
-    const aicConfig = getAICConfig();
-    const calculator = createCalculatorFromConfig(aicConfig);
-    const sessionTurns = lastScan.turns.filter(t => t.sessionId === latest.sessionId && t.timestamp);
-    let sessionAIC = 0;
-    for (const t of sessionTurns) {
-      const date = t.timestamp.slice(0, 10);
-      if (date < "2026-06-01") { continue; }
-      if (t.debugAicCredits > 0) {
-        sessionAIC += t.debugAicCredits;
-      } else {
-        const usage = calculator.calculateCredits(
-          t.modelFamily || "unknown",
-          t.debugPromptTokens || t.promptTokens,
-          t.debugOutputTokens || t.outputTokens,
-          0
-        );
-        sessionAIC += usage.totalCredits;
-      }
+  // When live OTel is active it is already scoped to this VS Code instance (in-memory).
+  // Compute AIC from OTel directly — no scanner needed for "current".
+  if (otel && otel.requests > 0) {
+    let otelAIC = 0;
+    let otelPrompt = 0;
+    let otelOutput = 0;
+    let otelModel = "unknown";
+    let maxTokens = 0;
+    for (const m of otel.byModel.values()) {
+      const usage = calculator.calculateCredits(m.model, m.prompt, m.completion, m.cached);
+      otelAIC += usage.totalCredits;
+      otelPrompt += m.prompt;
+      otelOutput += m.completion;
+      if (m.prompt + m.completion > maxTokens) { maxTokens = m.prompt + m.completion; otelModel = m.model; }
     }
-
-    // Cross-check: if session has actual API-reported total AIC, use it
-    if (latest.debugTotalAicCredits > 0) {
-      sessionAIC = latest.debugTotalAicCredits;
-    }
-
-    // Duration
-    let durationMin = 0;
-    if (latest.firstTimestamp && latest.lastTimestamp) {
-      const start = new Date(latest.firstTimestamp).getTime();
-      const end = new Date(latest.lastTimestamp).getTime();
-      if (end > start) { durationMin = Math.round((end - start) / 60000 * 10) / 10; }
-    }
-
-    const toolCount = lastScan.toolCalls.filter(tc => tc.sessionId === latest.sessionId).length;
-
+    currentSessionAIC = Math.round(otelAIC * 100) / 100;
     currentSession = {
-      sessionId: latest.sessionId,
-      sessionShort: latest.sessionId.slice(0, 8),
-      model: latest.modelFamily || latest.modelName || "unknown",
-      turns: latest.turnCount,
-      prompt: latest.debugTotalPrompt || latest.totalPromptTokens,
-      output: latest.debugTotalOutput || latest.totalOutputTokens,
-      toolCalls: toolCount,
-      durationMin,
-      aicCredits: Math.round(sessionAIC * 100) / 100,
+      sessionId: "otel",
+      sessionShort: "otel",
+      model: otelModel,
+      turns: otel.requests,
+      prompt: otelPrompt,
+      output: otelOutput,
+      toolCalls: 0,
+      durationMin: 0,
+      aicCredits: currentSessionAIC,
     };
-    currentSessionAIC = Math.round(sessionAIC * 100) / 100;
+  } else if (lastScan && lastScan.turns.length > 0) {
+    // No live OTel — use scanner turns that arrived AFTER this extension activated.
+    // This scopes "current" to this VS Code instance even when reading shared storage.
+    const instanceTurns = lastScan.turns.filter(t =>
+      t.timestamp && t.timestamp >= activationTime && t.timestamp.slice(0, 10) >= AIC_START
+    );
+
+    if (instanceTurns.length > 0) {
+      let instanceAIC = 0;
+      let instancePrompt = 0;
+      let instanceOutput = 0;
+      const modelTokens = new Map<string, number>();
+
+      for (const t of instanceTurns) {
+        if (t.debugAicCredits > 0) {
+          instanceAIC += t.debugAicCredits;
+        } else {
+          const usage = calculator.calculateCredits(
+            t.modelFamily || "unknown",
+            t.debugPromptTokens || t.promptTokens,
+            t.debugOutputTokens || t.outputTokens,
+            0
+          );
+          instanceAIC += usage.totalCredits;
+        }
+        instancePrompt += t.debugPromptTokens || t.promptTokens;
+        instanceOutput += t.debugOutputTokens || t.outputTokens;
+        const m = t.modelFamily || "unknown";
+        modelTokens.set(m, (modelTokens.get(m) ?? 0) + (t.debugPromptTokens || t.promptTokens) + (t.debugOutputTokens || t.outputTokens));
+      }
+
+      const topModel = [...modelTokens.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "unknown";
+      currentSessionAIC = Math.round(instanceAIC * 100) / 100;
+      currentSession = {
+        sessionId: "instance",
+        sessionShort: "instance",
+        model: topModel,
+        turns: instanceTurns.length,
+        prompt: instancePrompt,
+        output: instanceOutput,
+        toolCalls: 0,
+        durationMin: 0,
+        aicCredits: currentSessionAIC,
+      };
+    }
   }
 
   statusBar.updateStatus({
