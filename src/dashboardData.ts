@@ -142,6 +142,8 @@ export interface AICDashboardData {
     /** Promo period end date */
     promoEndDate: string;
   };
+  /** Whether credits come from actual API billing data (true) or computed estimates (false) */
+  isActualFromApi: boolean;
 }
 
 export interface LiveOtelData {
@@ -218,15 +220,23 @@ function computeSessionViews(sessions: Session[], toolCalls: ToolCall[], turns: 
   }
 
   // Per-session AIC credits (only for turns on/after AIC_EFFECTIVE_DATE)
+  // Prefer actual API-reported AIC (debugAicCredits) over computed from rates
   const sessionCreditsMap = new Map<string, number>();
   for (const t of turns) {
     if (!t.timestamp) { continue; }
     const date = t.timestamp.slice(0, 10);
     if (date < AIC_EFFECTIVE_DATE) { continue; }
-    const inputTokens = t.debugPromptTokens || t.promptTokens;
-    const outputTokens = t.debugOutputTokens || t.outputTokens;
-    const usage = calculator.calculateCredits(t.modelFamily || "unknown", inputTokens, outputTokens, 0);
-    sessionCreditsMap.set(t.sessionId, (sessionCreditsMap.get(t.sessionId) ?? 0) + usage.totalCredits);
+    let credits: number;
+    if (t.debugAicCredits > 0) {
+      // Use actual API-reported AIC (includes cache discounts)
+      credits = t.debugAicCredits;
+    } else {
+      // Fallback: compute from rates (upper-bound, no cache info)
+      const inputTokens = t.debugPromptTokens || t.promptTokens;
+      const outputTokens = t.debugOutputTokens || t.outputTokens;
+      credits = calculator.calculateCredits(t.modelFamily || "unknown", inputTokens, outputTokens, 0).totalCredits;
+    }
+    sessionCreditsMap.set(t.sessionId, (sessionCreditsMap.get(t.sessionId) ?? 0) + credits);
   }
 
   return sessions.map(s => {
@@ -336,14 +346,20 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
 
   // Build credit entries from turns (prefer debug-log actuals)
   // ONLY include turns on or after AIC effective date (June 1, 2026)
-  const creditEntries = scan.turns
-    .filter(t => t.timestamp && t.timestamp.slice(0, 10) >= AIC_EFFECTIVE_DATE)
-    .map(t => ({
+  // If turns have debugAicCredits (actual API-reported AIC), use those directly
+  const aicTurns = scan.turns.filter(t => t.timestamp && t.timestamp.slice(0, 10) >= AIC_EFFECTIVE_DATE);
+
+  // Check if we have actual AIC data from the API
+  const hasActualAic = aicTurns.some(t => t.debugAicCredits > 0);
+
+  const creditEntries = aicTurns.map(t => ({
       model: t.modelFamily || "unknown",
       inputTokens: t.debugPromptTokens || t.promptTokens,
       outputTokens: t.debugOutputTokens || t.outputTokens,
       cachedTokens: 0, // cached not available per-turn from chatSession data
       date: t.timestamp.slice(0, 10),
+      // Actual AIC from API (if available) — overrides computed credits
+      actualCredits: t.debugAicCredits > 0 ? t.debugAicCredits : undefined,
     }));
 
   // Add live OTel data if available (these have cached token info)
@@ -362,6 +378,7 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
         outputTokens: m.completion,
         cachedTokens: m.cached,
         date: new Date().toISOString().slice(0, 10),
+        actualCredits: undefined,
       });
     }
   }
@@ -421,6 +438,7 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
       creditsRemainingStandard: Math.round(Math.max(0, promoInfo.standardBudget - totalCr) * 100) / 100,
       promoEndDate: promoInfo.promoEndDate,
     },
+    isActualFromApi: hasActualAic,
   };
 
   // Determine current session AIC (most recent session with activity)

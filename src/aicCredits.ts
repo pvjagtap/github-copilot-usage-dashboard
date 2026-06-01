@@ -383,6 +383,8 @@ export class AICCalculator {
       outputTokens: number;
       cachedTokens: number;
       date: string; // ISO date "YYYY-MM-DD"
+      /** If set, use this as the actual credits instead of computing from rates */
+      actualCredits?: number;
     }>,
   ): CreditSummary {
     const byModel = new Map<string, CreditUsage>();
@@ -393,12 +395,25 @@ export class AICCalculator {
     let totalCached = 0;
 
     for (const entry of entries) {
-      const usage = this.calculateCredits(
-        entry.model,
-        entry.inputTokens,
-        entry.outputTokens,
-        entry.cachedTokens,
-      );
+      let usage: CreditUsage;
+      if (entry.actualCredits !== undefined && entry.actualCredits > 0) {
+        // Use API-reported actual credits (includes cache discounts)
+        usage = {
+          inputCredits: entry.actualCredits, // attribute all to "input" for simplicity
+          outputCredits: 0,
+          cachedCredits: 0,
+          totalCredits: entry.actualCredits,
+          model: entry.model,
+          tier: this.findModelRate(entry.model)?.tier ?? "premium",
+        };
+      } else {
+        usage = this.calculateCredits(
+          entry.model,
+          entry.inputTokens,
+          entry.outputTokens,
+          entry.cachedTokens,
+        );
+      }
 
       totalCredits += usage.totalCredits;
       totalInput += usage.inputCredits;

@@ -195,6 +195,7 @@ function updateStatusBar(): void {
     const latest = sorted[0];
 
     // Compute AIC for this session
+    // Prefer actual API-reported AIC (copilotUsageNanoAiu) over computed from rates
     const aicConfig = getAICConfig();
     const calculator = createCalculatorFromConfig(aicConfig);
     const sessionTurns = lastScan.turns.filter(t => t.sessionId === latest.sessionId && t.timestamp);
@@ -202,27 +203,22 @@ function updateStatusBar(): void {
     for (const t of sessionTurns) {
       const date = t.timestamp.slice(0, 10);
       if (date < "2026-06-01") { continue; }
-      const usage = calculator.calculateCredits(
-        t.modelFamily || "unknown",
-        t.debugPromptTokens || t.promptTokens,
-        t.debugOutputTokens || t.outputTokens,
-        0
-      );
-      sessionAIC += usage.totalCredits;
+      if (t.debugAicCredits > 0) {
+        sessionAIC += t.debugAicCredits;
+      } else {
+        const usage = calculator.calculateCredits(
+          t.modelFamily || "unknown",
+          t.debugPromptTokens || t.promptTokens,
+          t.debugOutputTokens || t.outputTokens,
+          0
+        );
+        sessionAIC += usage.totalCredits;
+      }
     }
 
-    // Cross-check: if session has debug-log aggregate and per-turn sum is lower,
-    // use the aggregate (debug log is authoritative — chatSession may not have flushed all turns)
-    if (latest.debugTotalPrompt > 0) {
-      const aggregateAIC = calculator.calculateCredits(
-        latest.modelFamily || "unknown",
-        latest.debugTotalPrompt,
-        latest.debugTotalOutput || 0,
-        0
-      ).totalCredits;
-      if (aggregateAIC > sessionAIC) {
-        sessionAIC = aggregateAIC;
-      }
+    // Cross-check: if session has actual API-reported total AIC, use it
+    if (latest.debugTotalAicCredits > 0) {
+      sessionAIC = latest.debugTotalAicCredits;
     }
 
     // Duration
