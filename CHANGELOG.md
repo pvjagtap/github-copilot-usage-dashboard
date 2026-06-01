@@ -7,12 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.4.1] - 2026-06-01
+## [1.5.0] - 2026-06-01
+
+### Added
+- Parse `copilotUsageNanoAiu` from debug-log `llm_request` entries — the exact billing amount GitHub's API reports per call
+- `debugAicCredits` per turn and `debugTotalAicCredits` per session populated from actual API data
+- Dashboard badge: green "✓ Actual billing data" when using API values, yellow "⚠️ Upper-bound estimate" when falling back to computed rates
+- `AIC-PROCESSING-PIPELINE.md` explainer documenting the full 6-step credit pipeline
+
+### Changed
+- Credit calculation now prioritizes actual API billing data (`nanoAiu / 1e9`) over computed per-model rates
+- Computed rates (500/M input) are now fallback-only — used when debug-log data is unavailable
+- `computeSummary()` accepts optional `actualCredits` field to bypass rate computation entirely
 
 ### Fixed
+- **77% over-estimation eliminated**: previous versions treated all input tokens at 500 credits/M, ignoring that ~98% are cache_read tokens billed at 50 credits/M
+- Verified result: 3,098 actual credits vs 13,500 previously computed for same session
 - AIC under-counting (~30%) when chatSession JSONL hasn't flushed all turn results to disk
 - Scanner now creates synthetic turns from debug-log data for unflushed entries
-- Status bar uses session-aggregate cross-check as accuracy safety net
 
 ## [1.4.0] - 2026-06-01
 
