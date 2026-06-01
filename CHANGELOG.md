@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-06-01
+
+### Fixed
+- AIC under-counting (~30%) when chatSession JSONL hasn't flushed all turn results to disk
+- Scanner now creates synthetic turns from debug-log data for unflushed entries
+- Status bar uses session-aggregate cross-check as accuracy safety net
+
 ## [1.4.0] - 2026-06-01
 
 ### Added

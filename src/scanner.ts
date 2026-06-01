@@ -34,6 +34,8 @@ export interface Session {
   debugTotalPrompt: number;
   /** Actual total output from debug-logs. 0 if no debug-log. */
   debugTotalOutput: number;
+  /** Actual total AI credits from API responses (nano-AIU / 1e9). 0 if not available. */
+  debugTotalAicCredits: number;
   turnCount: number;
   toolCallRounds: number;
   toolCallResults: number;
@@ -54,6 +56,8 @@ export interface Turn {
   debugPromptTokens: number;
   /** Actual cumulative output tokens from debug-logs. */
   debugOutputTokens: number;
+  /** Actual AI credits for this turn from API responses (nano-AIU / 1e9). 0 if not available. */
+  debugAicCredits: number;
   toolCallRounds: number;
   toolCallResults: number;
   workspaceName: string;
@@ -227,6 +231,7 @@ function parseSessionFile(filePath: string, wsHash: string, projectName: string)
               outputTokens: meta.outputTokens ?? 0,
               debugPromptTokens: 0,
               debugOutputTokens: 0,
+              debugAicCredits: 0,
               toolCallRounds: Array.isArray(meta.toolCallRounds) ? meta.toolCallRounds.length : 0,
               toolCallResults: Array.isArray(meta.toolCallResults) ? meta.toolCallResults.length : 0,
               workspaceName: wName,
@@ -269,6 +274,7 @@ function parseSessionFile(filePath: string, wsHash: string, projectName: string)
                 outputTokens: 0,
                 debugPromptTokens: 0,
                 debugOutputTokens: 0,
+                debugAicCredits: 0,
                 toolCallRounds: 0,
                 toolCallResults: 0,
                 workspaceName: extractWorkspaceName(undefined, wsHash),
@@ -319,6 +325,7 @@ function parseSessionFile(filePath: string, wsHash: string, projectName: string)
         outputTokens: meta.outputTokens ?? 0,
         debugPromptTokens: 0,
         debugOutputTokens: 0,
+        debugAicCredits: 0,
         toolCallRounds: Array.isArray(meta.toolCallRounds) ? meta.toolCallRounds.length : 0,
         toolCallResults: Array.isArray(meta.toolCallResults) ? meta.toolCallResults.length : 0,
         workspaceName: wName,
@@ -403,6 +410,7 @@ function parseSessionFile(filePath: string, wsHash: string, projectName: string)
       totalOutputTokens: totalOutput,
       debugTotalPrompt: 0,
       debugTotalOutput: 0,
+      debugTotalAicCredits: 0,
       turnCount: turns.length,
       toolCallRounds: totalToolRounds,
       toolCallResults: totalToolResults,
@@ -548,6 +556,8 @@ interface DebugLogTurnTokens {
   llmCalls: number;
   /** Epoch ms timestamp from turn_start event */
   timestamp: number;
+  /** Sum of copilotUsageNanoAiu for all LLM calls in this turn */
+  nanoAiu: number;
 }
 
 interface DebugLogData {
@@ -557,6 +567,8 @@ interface DebugLogData {
   totalPrompt: number;
   totalOutput: number;
   totalLlmCalls: number;
+  /** Total nano-AIU from all LLM calls (sum of copilotUsageNanoAiu) */
+  totalNanoAiu: number;
 }
 
 /**
@@ -576,6 +588,7 @@ function parseDebugLog(filePath: string): DebugLogData | null {
   let totalPrompt = 0;
   let totalOutput = 0;
   let totalLlmCalls = 0;
+  let totalNanoAiu = 0;
 
   for (const line of lines) {
     let entry: any;
@@ -588,7 +601,7 @@ function parseDebugLog(filePath: string): DebugLogData | null {
       const tid = entry.attrs?.turnId;
       currentTurn = tid !== undefined ? parseInt(String(tid), 10) : currentTurn + 1;
       if (!turnMap.has(currentTurn)) {
-        turnMap.set(currentTurn, { turnIndex: currentTurn, promptTotal: 0, outputTotal: 0, llmCalls: 0, timestamp: entry.ts ?? 0 });
+        turnMap.set(currentTurn, { turnIndex: currentTurn, promptTotal: 0, outputTotal: 0, llmCalls: 0, timestamp: entry.ts ?? 0, nanoAiu: 0 });
       }
     } else if (type === "turn_end") {
       // Keep currentTurn for next turn_start to increment
@@ -596,17 +609,20 @@ function parseDebugLog(filePath: string): DebugLogData | null {
       const attrs = entry.attrs ?? {};
       const inp = Number(attrs.inputTokens ?? 0);
       const out = Number(attrs.outputTokens ?? 0);
+      const nanoAiu = Number(attrs.copilotUsageNanoAiu ?? 0);
       totalPrompt += inp;
       totalOutput += out;
+      totalNanoAiu += nanoAiu;
       totalLlmCalls++;
 
       if (currentTurn >= 0) {
         if (!turnMap.has(currentTurn)) {
-          turnMap.set(currentTurn, { turnIndex: currentTurn, promptTotal: 0, outputTotal: 0, llmCalls: 0, timestamp: 0 });
+          turnMap.set(currentTurn, { turnIndex: currentTurn, promptTotal: 0, outputTotal: 0, llmCalls: 0, timestamp: 0, nanoAiu: 0 });
         }
         const t = turnMap.get(currentTurn)!;
         t.promptTotal += inp;
         t.outputTotal += out;
+        t.nanoAiu += nanoAiu;
         t.llmCalls++;
       }
     }
@@ -621,6 +637,7 @@ function parseDebugLog(filePath: string): DebugLogData | null {
     totalPrompt,
     totalOutput,
     totalLlmCalls,
+    totalNanoAiu,
   };
 }
 
@@ -726,6 +743,7 @@ export function scanWorkspaceStorage(): ScanResult {
     if (!dbg) { continue; }
     s.debugTotalPrompt = dbg.totalPrompt;
     s.debugTotalOutput = dbg.totalOutput;
+    s.debugTotalAicCredits = dbg.totalNanoAiu / 1_000_000_000;
     s.debugLogPath = dbg.filePath;
 
     // Enrich individual turns + create synthetic turns for unmatched debug-log entries
@@ -735,6 +753,7 @@ export function scanWorkspaceStorage(): ScanResult {
         for (const t of matchingTurns) {
           t.debugPromptTokens = dt.promptTotal;
           t.debugOutputTokens = dt.outputTotal;
+          t.debugAicCredits = dt.nanoAiu / 1_000_000_000;
         }
       } else if (dt.promptTotal > 0 || dt.outputTotal > 0) {
         // chatSession hasn't flushed this turn yet — create synthetic turn from debug-log
@@ -748,6 +767,7 @@ export function scanWorkspaceStorage(): ScanResult {
           outputTokens: 0,
           debugPromptTokens: dt.promptTotal,
           debugOutputTokens: dt.outputTotal,
+          debugAicCredits: dt.nanoAiu / 1_000_000_000,
           toolCallRounds: dt.llmCalls > 1 ? dt.llmCalls - 1 : 0,
           toolCallResults: 0,
           workspaceName: "",

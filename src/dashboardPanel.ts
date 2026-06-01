@@ -587,7 +587,9 @@ function renderAIC(aic) {
   const calendarHTML = buildCreditCalendar(aic.billingCycleStart, aic.billingCycleEnd, dayMap);
 
   // Estimation note
-  const cacheNote = aic.cachedCredits === 0
+  const cacheNote = aic.isActualFromApi
+    ? '<div style="margin-top:8px;padding:6px 10px;background:var(--border);border-radius:4px;font-size:10px;color:#4ec9b0">✓ <strong>Actual billing data:</strong> Credits sourced from API-reported copilotUsageNanoAiu per request. Includes cache discounts.</div>'
+    : aic.cachedCredits === 0
     ? '<div style="margin-top:8px;padding:6px 10px;background:var(--border);border-radius:4px;font-size:10px;color:var(--muted)">⚠️ <strong>Upper-bound estimate:</strong> Cache savings cannot be detected from session logs. Actual credits consumed may be lower if cached input tokens were used. Check GitHub billing for exact usage.</div>'
     : '';
 
