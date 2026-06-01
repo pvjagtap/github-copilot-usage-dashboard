@@ -68,8 +68,9 @@ function isToolSpan(span: any): boolean {
   return ["tool.name", "gen_ai.tool.name", "tool.type"].some(k => getAttr(attrs, k) !== undefined);
 }
 
-function parseTraceGroups(payload: any): OTelRequest[] {
+function parseTraceGroups(payload: any, log?: (msg: string) => void): OTelRequest[] {
   const grouped = new Map<string, any[]>();
+  let totalSpans = 0;
 
   for (const rs of payload?.resourceSpans ?? []) {
     for (const ss of rs?.scopeSpans ?? []) {
@@ -78,8 +79,13 @@ function parseTraceGroups(payload: any): OTelRequest[] {
         if (!tid) { continue; }
         if (!grouped.has(tid)) { grouped.set(tid, []); }
         grouped.get(tid)!.push(span);
+        totalSpans++;
       }
     }
+  }
+
+  if (totalSpans > 0) {
+    log?.(`OTel parseTraceGroups: ${grouped.size} trace group(s), ${totalSpans} span(s)`);
   }
 
   const results: OTelRequest[] = [];
@@ -109,14 +115,14 @@ function parseTraceGroups(payload: any): OTelRequest[] {
       ?? getAttr(attrs, "llm.request.model")
       ?? "unknown";
 
-    const promptTokens = Number(
+    let promptTokens = Number(
       getAttr(attrs, "gen_ai.usage.prompt_tokens")
       ?? getAttr(attrs, "llm.usage.prompt_tokens")
       ?? getAttr(attrs, "gen_ai.usage.input_tokens")
       ?? 0
     );
 
-    const completionTokens = Number(
+    let completionTokens = Number(
       getAttr(attrs, "gen_ai.usage.completion_tokens")
       ?? getAttr(attrs, "llm.usage.completion_tokens")
       ?? getAttr(attrs, "gen_ai.usage.output_tokens")
@@ -126,24 +132,35 @@ function parseTraceGroups(payload: any): OTelRequest[] {
     let cachedTokens: number | undefined = getAttr(attrs, "gen_ai.usage.cache_read.input_tokens");
     let ttft: number | undefined = getAttr(attrs, "copilot_chat.time_to_first_token");
 
-    // Check child panel spans for cached/ttft
-    if (cachedTokens === undefined || ttft === undefined) {
-      for (const span of spans) {
-        if (span === primary) { continue; }
-        const ca = span.attributes ?? [];
-        const agent = getAttr(ca, "gen_ai.agent.name") ?? "";
-        if (!String(agent).startsWith("panel/")) { continue; }
-        if (cachedTokens === undefined) {
-          cachedTokens = getAttr(ca, "gen_ai.usage.cache_read.input_tokens");
-        }
-        if (ttft === undefined) {
-          ttft = getAttr(ca, "copilot_chat.time_to_first_token");
-        }
-        if (cachedTokens !== undefined && ttft !== undefined) { break; }
+    // Check ALL child spans for any token/timing data missed on the primary span
+    for (const span of spans) {
+      if (span === primary) { continue; }
+      const ca = span.attributes ?? [];
+      if (promptTokens === 0) {
+        const pt = getAttr(ca, "gen_ai.usage.prompt_tokens")
+          ?? getAttr(ca, "gen_ai.usage.input_tokens")
+          ?? getAttr(ca, "llm.usage.prompt_tokens");
+        if (pt !== undefined) { promptTokens = Number(pt); }
       }
+      if (completionTokens === 0) {
+        const ct = getAttr(ca, "gen_ai.usage.completion_tokens")
+          ?? getAttr(ca, "gen_ai.usage.output_tokens")
+          ?? getAttr(ca, "llm.usage.completion_tokens");
+        if (ct !== undefined) { completionTokens = Number(ct); }
+      }
+      if (cachedTokens === undefined) {
+        cachedTokens = getAttr(ca, "gen_ai.usage.cache_read.input_tokens");
+      }
+      if (ttft === undefined) {
+        ttft = getAttr(ca, "copilot_chat.time_to_first_token");
+      }
+      if (promptTokens > 0 && completionTokens > 0 && cachedTokens !== undefined && ttft !== undefined) { break; }
     }
 
     if (!promptTokens && !completionTokens && cachedTokens === undefined && ttft === undefined) {
+      const opName = getAttr(attrs, "gen_ai.operation.name") ?? "";
+      const attrKeys = (attrs as any[]).map((a: any) => a?.key).filter(Boolean).join(",");
+      log?.(`OTel: skipping trace (model=${model}, op=${opName}, spans=${spans.length}, no token data; keys=[${attrKeys}])`);
       continue;
     }
 
@@ -337,7 +354,7 @@ export class OTelReceiver {
           }
 
           if (req.url === "/v1/traces") {
-            const parsed = parseTraceGroups(payload);
+            const parsed = parseTraceGroups(payload, this._log.bind(this));
             // Deduplicate by requestId
             const existing = new Set(this.requests.map(r => r.requestId));
             const newReqs = parsed.filter(r => !existing.has(r.requestId));
@@ -383,6 +400,13 @@ export class OTelReceiver {
         });
         this.server!.listen(p, "127.0.0.1", () => {
           this._port = p;
+          // Self-test: verify we can reach our own endpoint
+          http.get(`http://127.0.0.1:${p}/healthz`, (testRes) => {
+            testRes.resume();
+            this._log(`OTel receiver self-test: HTTP ${testRes.statusCode} — server is reachable at 127.0.0.1:${p}`);
+          }).on("error", (err: Error) => {
+            this._log(`OTel receiver self-test FAILED: ${err.message} — receiver may not be reachable`);
+          });
           resolve(p);
         });
       };

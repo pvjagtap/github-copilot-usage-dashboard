@@ -64,23 +64,24 @@ export class StatusBarProvider {
       const p = fmt(otel!.prompt);
       const o = fmt(otel!.completion);
       const c = fmt(otel!.cached);
-      const aic = data?.currentSessionAIC ? ` | AIC:${data.currentSessionAIC.toFixed(1)}` : "";
+      const aic = data?.currentSessionAIC ? ` | AIC(cur):${data.currentSessionAIC.toFixed(1)}` : "";
       this.item.text = `$(zap) In:${p} Out:${o} Cache:${c}${aic}`;
       this.item.tooltip = [
         `Copilot Token Usage — This Session (${otel!.requests} requests)`,
         `  Prompt: ${otel!.prompt.toLocaleString()}`,
         `  Output: ${otel!.completion.toLocaleString()}`,
         `  Cached: ${otel!.cached.toLocaleString()}`,
-        data?.currentSessionAIC ? `  AI Credits: ${data.currentSessionAIC.toFixed(2)}` : "",
+        data?.currentSessionAIC ? `  AI Credits (current session): ${data.currentSessionAIC.toFixed(2)}` : "",
         "",
         cs ? `Session: ${cs.sessionShort}… | Model: ${cs.model} | Turns: ${cs.turns}` : "",
         data?.totalSessions ? `Total sessions in workspace: ${data.totalSessions}` : "",
+        `Dashboard AIC cards show billing-cycle totals across sessions.`,
         "Click to open full dashboard",
       ].filter(Boolean).join("\n");
     } else if (cs) {
       const p = fmt(cs.prompt);
       const o = fmt(cs.output);
-      const aic = cs.aicCredits ? ` | AIC:${cs.aicCredits.toFixed(1)}` : "";
+      const aic = cs.aicCredits ? ` | AIC(cur):${cs.aicCredits.toFixed(1)}` : "";
       this.item.text = `$(dashboard) ${cs.model} | In:${p} Out:${o}${aic}`;
       this.item.tooltip = [
         `Copilot Usage — Current Session`,
@@ -91,9 +92,10 @@ export class StatusBarProvider {
         `  Output: ${cs.output.toLocaleString()}`,
         `  Tool calls: ${cs.toolCalls}`,
         `  Duration: ${cs.durationMin}m`,
-        cs.aicCredits ? `  AI Credits: ${cs.aicCredits.toFixed(2)}` : "",
+        cs.aicCredits ? `  AI Credits (current session): ${cs.aicCredits.toFixed(2)}` : "",
         "",
         data?.totalSessions ? `Total sessions in workspace: ${data.totalSessions}` : "",
+        `Dashboard AIC cards show billing-cycle totals across sessions.`,
         "Click to open full dashboard",
       ].filter(Boolean).join("\n");
     }

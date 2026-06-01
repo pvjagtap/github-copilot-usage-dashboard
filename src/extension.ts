@@ -105,6 +105,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       } else {
         output.appendLine(`OTel settings already correct: endpoint=${expectedEndpoint}`);
       }
+
+      // Diagnostic summary — helps pinpoint why OTel may not be flowing
+      const captureContent = config.get<boolean>("captureContent");
+      const dbSpan = config.get<boolean>("dbSpanExporter.enabled");
+      const exporterType = config.get<string>("exporterType");
+      output.appendLine(`OTel config summary: enabled=true exporterType=${exporterType} endpoint=${expectedEndpoint} captureContent=${captureContent} dbSpanExporter=${dbSpan}`);
+      output.appendLine(`Tip: If no spans appear below, open "Help → Toggle Developer Tools → Console" and search for "[OTel]"`);
+      output.appendLine(`Tip: After changing settings, run "Developer: Reload Window" for Copilot Chat to pick them up`);
     } catch (err) {
       output.appendLine(`Could not update settings: ${err}`);
     }

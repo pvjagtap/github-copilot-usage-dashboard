@@ -398,17 +398,18 @@ function render() {
 function renderOtel(live) {
   const el = document.getElementById('live-otel-section');
   if (!live || !live.requests) {
-    el.innerHTML = '<div class="table-card"><div class="section-head"><div class="section-title">Live OpenTelemetry</div><div class="section-subtitle">Waiting for Copilot telemetry</div></div><div class="empty-panel">The OTel receiver is active. Send a Copilot chat message and data will appear here.</div></div>';
+    el.innerHTML = '<div class="table-card"><div class="section-head"><div class="section-title">Live OpenTelemetry</div><div class="section-subtitle">Waiting for Copilot telemetry</div></div><div class="empty-panel">No live OTLP events yet. If global telemetry stays off, the dashboard can still use debug-log based historical activity after chat turns are written to disk.</div></div>';
     return;
   }
   const ls = live.lastSeen ? new Date(live.lastSeen).toLocaleString('en-CA', {hour12: false}).replace(',','') : '';
   const csub = live.metricCached ? 'using metric deltas' : 'trace fallback only';
+  const sourceLabel = live.source === 'debug-log' ? 'Local debug-log fallback' : 'Live OTLP receiver';
   let rows = '';
   (live.byModel||[]).forEach(m => {
     rows += '<tr><td><span class="model-tag '+mc(m.model)+'">'+esc(m.model)+'</span></td><td class="num">'+m.requests+'</td><td class="num">'+fmt(m.prompt)+'</td><td class="num">'+fmt(m.completion)+'</td><td class="num">'+fmt(m.traceCached)+'</td><td class="num">'+fmt(m.metricCached)+'</td><td class="num cached">'+fmt(m.cached)+'</td></tr>';
   });
-  el.innerHTML = '<div class="table-card"><div class="section-head"><div class="section-title">Live OpenTelemetry</div><div class="section-subtitle">Last event '+esc(ls)+'</div></div>'
-    +'<div class="note">Live OTLP export. Cached tokens prefer cumulative metric deltas when available.</div>'
+  el.innerHTML = '<div class="table-card"><div class="section-head"><div class="section-title">Live OpenTelemetry</div><div class="section-subtitle">'+esc(sourceLabel)+' • Last event '+esc(ls)+'</div></div>'
+    +'<div class="note">'+(live.source === 'debug-log' ? 'Using local debug-log activity because OTLP export is unavailable. Cache-read tokens are not available in this fallback.' : 'Live OTLP export. Cached tokens prefer cumulative metric deltas when available.')+'</div>'
     +'<div class="stats-row">'
     +['OTel Requests:'+live.requests+':last event '+esc(ls),'Live Prompt:'+fmt(live.prompt)+':from traces','Live Output:'+fmt(live.completion)+':from traces','Live Cached:'+fmt(live.cached)+':'+csub,'Trace Cache:'+fmt(live.traceCached)+':cache_read','Metric Cache:'+fmt(live.metricCached)+':token.usage']
       .map((s,i)=>{const p=s.split(':');return '<div class="stat-card"><div class="label">'+p[0]+'</div><div class="value'+(i===3?' cached':'')+'">'+p[1]+'</div><div class="sub">'+p[2]+'</div></div>';}).join('')
@@ -501,7 +502,7 @@ function buildCreditCalendar(cycleStart, cycleEnd, dayMap) {
 
     const todayOutline = isToday ? ';outline:2px solid var(--blue);outline-offset:-1px' : '';
     const tooltip = mc.date + ': ' + mc.credits.toFixed(1) + ' credits';
-    const creditsLabel = mc.credits > 0 ? '<div style="font-size:8px;color:'+textColor+';opacity:0.9">'+mc.credits.toFixed(0)+'</div>' : '';
+    const creditsLabel = mc.credits > 0 ? '<div style="font-size:8px;color:'+textColor+';opacity:0.9">'+mc.credits.toFixed(1)+'</div>' : '';
 
     gridCells += '<div title="'+tooltip+'" style="aspect-ratio:1;border-radius:4px;background:'+bg+';border:'+border+';display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:default'+todayOutline+'">'
       + '<div style="font-size:10px;font-weight:600;color:'+textColor+'">'+mc.day+'</div>'
