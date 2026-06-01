@@ -2,7 +2,7 @@
   "name": "copilot-usage-dashboard",
   "displayName": "Copilot Usage Dashboard",
   "description": "Live token usage dashboard for GitHub Copilot — prompt, output, and cached tokens with full analytics.",
-  "version": "1.2.0",
+  "version": "1.4.0",
   "publisher": "pvjagtap",
   "icon": "images/icon.png",
   "license": "MIT",
@@ -44,7 +44,61 @@
         "command": "copilotUsage.refresh",
         "title": "Copilot Usage: Refresh Stats"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Copilot Usage — AI Credits (AIC)",
+      "properties": {
+        "copilotUsage.aic.plan": {
+          "type": "string",
+          "default": "business",
+          "enum": ["free", "pro", "pro_plus", "business", "business_promo", "enterprise", "enterprise_promo"],
+          "enumDescriptions": [
+            "Free tier (250 credits/month)",
+            "Pro — $10/month (1,000 credits)",
+            "Pro+ — $39/month (7,500 credits)",
+            "Business — $19/user/month (1,900 credits/user, pooled)",
+            "Business Promo — June–Sept 2026 (3,000 credits/user, pooled)",
+            "Enterprise — $39/user/month (3,900 credits/user, pooled)",
+            "Enterprise Promo — June–Sept 2026 (7,000 credits/user, pooled)"
+          ],
+          "description": "Your GitHub Copilot plan. Determines included monthly AI credits per user."
+        },
+        "copilotUsage.aic.billingCycleStartDay": {
+          "type": "number",
+          "default": 1,
+          "minimum": 1,
+          "maximum": 28,
+          "description": "Day of month when your billing cycle starts (1-28)."
+        },
+        "copilotUsage.aic.monthlyCreditsIncluded": {
+          "type": "number",
+          "default": 1900,
+          "description": "Override monthly included credits per user (set 0 for unlimited). Defaults based on plan selection."
+        },
+        "copilotUsage.aic.overageCostPerCredit": {
+          "type": "number",
+          "default": 0.01,
+          "description": "Cost in USD per AI credit overage. Official rate: 1 credit = $0.01 USD."
+        },
+        "copilotUsage.aic.customModelCosts": {
+          "type": "array",
+          "default": [],
+          "description": "Custom per-model credit rates (per 1M tokens). Overrides defaults for specified models.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "model": { "type": "string", "description": "Model identifier (e.g., 'claude-opus-4.6')" },
+              "inputCreditsPerMillion": { "type": "number", "description": "Credits per 1M input tokens" },
+              "outputCreditsPerMillion": { "type": "number", "description": "Credits per 1M output tokens" },
+              "cachedInputCreditsPerMillion": { "type": "number", "description": "Credits per 1M cached input tokens (read)" },
+              "cacheWriteCreditsPerMillion": { "type": "number", "description": "Credits per 1M cache write tokens (Anthropic only, 0 for others)" },
+              "tier": { "type": "string", "enum": ["base", "premium", "custom"], "description": "Cost tier" }
+            },
+            "required": ["model", "inputCreditsPerMillion", "outputCreditsPerMillion", "cachedInputCreditsPerMillion", "cacheWriteCreditsPerMillion", "tier"]
+          }
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",

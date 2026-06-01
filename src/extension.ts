@@ -1,9 +1,10 @@
 import * as vscode from "vscode";
 import { OTelReceiver } from "./otelReceiver";
-import { StatusBarProvider } from "./statusBar";
+import { StatusBarProvider, CurrentSessionInfo } from "./statusBar";
 import { DashboardPanel } from "./dashboardPanel";
 import { scanWorkspaceStorage, ScanResult } from "./scanner";
 import { buildDashboardData, DashboardData } from "./dashboardData";
+import { AICConfig, DEFAULT_AIC_CONFIG, createCalculatorFromConfig } from "./aicCredits";
 
 const OTEL_PORT = 14318;
 const DEFAULT_REFRESH_MS = 120_000;
@@ -14,10 +15,22 @@ let scanTimer: ReturnType<typeof setInterval> | undefined;
 let lastScan: ScanResult | undefined;
 let output: vscode.OutputChannel;
 
+function getAICConfig(): AICConfig {
+  const cfg = vscode.workspace.getConfiguration("copilotUsage.aic");
+  return {
+    plan: cfg.get<string>("plan") ?? DEFAULT_AIC_CONFIG.plan,
+    billingCycleStartDay: cfg.get<number>("billingCycleStartDay") ?? DEFAULT_AIC_CONFIG.billingCycleStartDay,
+    monthlyCreditsIncluded: cfg.get<number>("monthlyCreditsIncluded") ?? DEFAULT_AIC_CONFIG.monthlyCreditsIncluded,
+    overageCostPerCredit: cfg.get<number>("overageCostPerCredit") ?? DEFAULT_AIC_CONFIG.overageCostPerCredit,
+    customModelCosts: cfg.get("customModelCosts") ?? DEFAULT_AIC_CONFIG.customModelCosts,
+  };
+}
+
 function buildData(): DashboardData {
   const scan = lastScan ?? { sessions: [], turns: [], toolCalls: [], subagents: [], stats: { sourceFiles: 0, canonicalSessions: 0, mirroredSessions: 0, mirrorCopiesPruned: 0, turnsStored: 0, toolCallsStored: 0, promptPreviews: 0, transcriptsFound: 0, debugLogSessions: 0 } };
   const live = receiver?.getStats() ?? null;
-  return buildDashboardData(scan, live);
+  const aicConfig = getAICConfig();
+  return buildDashboardData(scan, live, aicConfig);
 }
 
 async function runScan(): Promise<void> {
@@ -169,13 +182,65 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 function updateStatusBar(): void {
   if (!statusBar) { return; }
   const scan = lastScan?.stats ?? null;
-  const totalPrompt = lastScan?.turns.reduce((s, t) => s + t.promptTokens, 0) ?? 0;
-  const totalOutput = lastScan?.turns.reduce((s, t) => s + t.outputTokens, 0) ?? 0;
+  const otel = receiver?.getStats() ?? null;
+
+  // Find the most recent session (proxy for "current active session" in this instance)
+  let currentSession: CurrentSessionInfo | null = null;
+  let currentSessionAIC = 0;
+
+  if (lastScan && lastScan.sessions.length > 0) {
+    const sorted = [...lastScan.sessions].sort((a, b) =>
+      (b.lastTimestamp || "").localeCompare(a.lastTimestamp || "")
+    );
+    const latest = sorted[0];
+
+    // Compute AIC for this session
+    const aicConfig = getAICConfig();
+    const calculator = createCalculatorFromConfig(aicConfig);
+    const sessionTurns = lastScan.turns.filter(t => t.sessionId === latest.sessionId && t.timestamp);
+    let sessionAIC = 0;
+    for (const t of sessionTurns) {
+      const date = t.timestamp.slice(0, 10);
+      if (date < "2026-06-01") { continue; }
+      const usage = calculator.calculateCredits(
+        t.modelFamily || "unknown",
+        t.debugPromptTokens || t.promptTokens,
+        t.debugOutputTokens || t.outputTokens,
+        0
+      );
+      sessionAIC += usage.totalCredits;
+    }
+
+    // Duration
+    let durationMin = 0;
+    if (latest.firstTimestamp && latest.lastTimestamp) {
+      const start = new Date(latest.firstTimestamp).getTime();
+      const end = new Date(latest.lastTimestamp).getTime();
+      if (end > start) { durationMin = Math.round((end - start) / 60000 * 10) / 10; }
+    }
+
+    const toolCount = lastScan.toolCalls.filter(tc => tc.sessionId === latest.sessionId).length;
+
+    currentSession = {
+      sessionId: latest.sessionId,
+      sessionShort: latest.sessionId.slice(0, 8),
+      model: latest.modelFamily || latest.modelName || "unknown",
+      turns: latest.turnCount,
+      prompt: latest.debugTotalPrompt || latest.totalPromptTokens,
+      output: latest.debugTotalOutput || latest.totalOutputTokens,
+      toolCalls: toolCount,
+      durationMin,
+      aicCredits: Math.round(sessionAIC * 100) / 100,
+    };
+    currentSessionAIC = Math.round(sessionAIC * 100) / 100;
+  }
+
   statusBar.updateStatus({
-    otel: receiver?.getStats() ?? null,
+    otel,
     scan,
-    totalPrompt,
-    totalOutput,
+    currentSession,
+    totalSessions: scan?.canonicalSessions ?? 0,
+    currentSessionAIC,
   });
 }
 

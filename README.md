@@ -11,21 +11,22 @@
 <p align="center">
   <img src="https://img.shields.io/badge/VS%20Code-1.85%2B-blue?logo=visualstudiocode" alt="VS Code 1.85+">
   <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License">
-  <img src="https://img.shields.io/badge/Version-0.1.4-purple" alt="Version">
+  <img src="https://img.shields.io/badge/Version-1.3.0-purple" alt="Version">
 </p>
 
 ---
 
 ## Features
 
+- **AI Credits (AIC) tracking** — per-model credit costs with configurable rates (June 2025 billing model)
+- **Budget monitoring** — monthly budget progress bar, projected usage, overage cost estimates
 - Token counts (prompt, output, cached) per session, model, project, and day
 - Session browser with title, preview, duration, tools, and subagent usage
 - Clickable links to session log and transcript JSONL files
-- Model breakdown across Claude, GPT, Gemini families
-- Daily usage trends (stacked bar chart)
+- Model breakdown across Claude, GPT, Gemini families with per-model credit costs
+- Daily usage trends (stacked bar chart) + daily credits chart
 - Tool and subagent call tracking
 - Live OpenTelemetry receiver (OTLP HTTP on port 14318)
-- Premium usage estimation with model multipliers
 - Auto-refresh (30s / 1m / 2m / 5m / Off) and manual refresh
 - Status bar with session count and token totals
 - Multi-root workspace support
@@ -63,6 +64,55 @@ The extension auto-configures OTel settings on first activation:
 | `github.copilot.chat.otel.otlpEndpoint` | `http://127.0.0.1:14318` |
 
 A VS Code reload is needed after first install for Copilot to start exporting telemetry.
+
+### AI Credits (AIC) Configuration
+
+Since June 1, 2025, GitHub Copilot uses [usage-based billing with AI Credits](https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-organizations-and-enterprises).
+
+Configure your plan in **Settings** → search `copilotUsage.aic`:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `copilotUsage.aic.plan` | `business` | Your Copilot plan |
+| `copilotUsage.aic.billingCycleStartDay` | `1` | Day of month billing cycle starts |
+| `copilotUsage.aic.monthlyCreditsIncluded` | `1900` | Monthly included credits per user (override plan default) |
+| `copilotUsage.aic.overageCostPerCredit` | `0.01` | 1 AI credit = $0.01 USD |
+| `copilotUsage.aic.customModelCosts` | `[]` | Custom per-model credit rates |
+
+#### Plan Defaults (per user/month, pooled at billing entity)
+
+| Plan | Credits/Month | Overage | Notes |
+|------|--------------|---------|-------|
+| Free | 250 | N/A (blocked) | |
+| Pro | 1,000 | $0.01/credit | |
+| Pro+ | 7,500 | $0.01/credit | |
+| **Business** | **1,900** | $0.01/credit | Pooled across org |
+| Business (promo) | 3,000 | $0.01/credit | June–Sept 2026 |
+| Enterprise | 3,900 | $0.01/credit | Pooled across enterprise |
+| Enterprise (promo) | 7,000 | $0.01/credit | June–Sept 2026 |
+
+> **1 AI credit = $0.01 USD.** Credits are pooled — an org with 10 Business users gets 19,000 credits shared.
+
+#### Custom Model Costs
+
+Override or add model pricing via `copilotUsage.aic.customModelCosts`:
+
+```json
+"copilotUsage.aic.customModelCosts": [
+  {
+    "model": "claude-opus-4.6",
+    "inputCreditsPerMillion": 500,
+    "outputCreditsPerMillion": 2500,
+    "cachedInputCreditsPerMillion": 50,
+    "cacheWriteCreditsPerMillion": 625,
+    "tier": "premium"
+  }
+]
+```
+
+Credits are calculated as: `(net_input_tokens / 1M) × inputRate + (output_tokens / 1M) × outputRate + (cached_read_tokens / 1M) × cachedRate`
+
+Anthropic models also incur cache write costs: `(cache_write_tokens / 1M) × cacheWriteRate`
 
 ## Commands
 
