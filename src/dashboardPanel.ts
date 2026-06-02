@@ -624,7 +624,7 @@ function renderAgentSessions(agent) {
   // Total row values
   const totalSess  = agent.totalSessions;
   const totalCalls = (agent.vscodeTurns||0) + (agent.ompLlmCalls||0) + (agent.piLlmCalls||0);
-  const totalTok   = (agent.vscodeTotalTokens||0) + (agent.ompTotalTokens||0) + (agent.piTotalTokens||0);
+  const totalTok   = (agent.vscodeTotalTokens||0) + (agent.ompAllTimeTokens||0) + (agent.piAllTimeTokens||0);
   const totalAIC   = fmtAIC(agent.totalCredits||0);
 
   const fmtTok = v => {
@@ -655,14 +655,14 @@ function renderAgentSessions(agent) {
       '<td class="num orange"><strong>'+totalCalls.toLocaleString()+'</strong></td>' +
     '</tr>' +
     '<tr>' +
-      '<td>Tokens (prompt + output)</td>' +
+      '<td>Tokens — prompt + output <span style="font-size:10px;color:var(--muted)">(all time)</span></td>' +
       '<td class="num">'+fmtTok(agent.vscodeTotalTokens||0)+'</td>' +
-      '<td class="num">'+fmtTok(agent.ompTotalTokens||0)+'</td>' +
-      '<td class="num">'+fmtTok(agent.piTotalTokens||0)+'</td>' +
+      '<td class="num">'+fmtTok(agent.ompAllTimeTokens||0)+'</td>' +
+      '<td class="num">'+fmtTok(agent.piAllTimeTokens||0)+'</td>' +
       '<td class="num orange"><strong>'+fmtTok(totalTok)+'</strong></td>' +
     '</tr>' +
     '<tr style="border-top:1px solid var(--border)">' +
-      '<td><strong>AIC Credits</strong></td>' +
+      '<td><strong>AIC Credits</strong> <span style="font-size:10px;color:var(--muted)">(Jun 1+ only)</span></td>' +
       '<td class="num orange">'+fmtAIC(agent.vscodeAicCredits||0)+'</td>' +
       '<td class="num orange">'+fmtAIC(agent.ompTotalCredits||0)+'</td>' +
       '<td class="num orange">'+fmtAIC(agent.piTotalCredits||0)+'</td>' +

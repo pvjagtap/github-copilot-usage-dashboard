@@ -75,15 +75,16 @@ export interface AgentScanResult {
   totalPremiumRequests: number;
   ompSessionCount: number;
   piSessionCount: number;
+  /** All-time (unfiltered by billing period) per-source totals — for historical token display */
+  ompAllTimeSessions: number;
+  ompAllTimeLlmCalls: number;
+  ompAllTimeTokens: number;
+  piAllTimeSessions: number;
+  piAllTimeLlmCalls: number;
+  piAllTimeTokens: number;
   scanMs: number;
 }
 
-// ─── Billing Period ───────────────────────────────────────────
-
-function getBillingStart(): number {
-  const now = new Date();
-  return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
-}
 
 // ─── Directory Resolution ─────────────────────────────────────
 
@@ -303,26 +304,38 @@ async function scanDirectory(
  */
 export async function scanAgentSessions(): Promise<AgentScanResult> {
   const t0 = Date.now();
-  const billingStart = getBillingStart();
+  const billingStart = Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1);
 
-  const [ompSessions, piSessions] = await Promise.all([
+  const [ompRaw, piRaw] = await Promise.all([
     scanDirectory(getOmpSessionsRoot(), "omp"),
     scanDirectory(getPiSessionsRoot(), "pi"),
   ]);
 
-  // Merge and filter to billing period
-  const allRaw = [...ompSessions, ...piSessions];
-  const billable = allRaw.filter(s => (s.lastTs || s.firstTs) >= billingStart);
+  // All-time per-source totals (before billing filter) — for historical token display
+  let ompAllTimeSessions = 0, ompAllTimeLlmCalls = 0, ompAllTimeTokens = 0;
+  let piAllTimeSessions  = 0, piAllTimeLlmCalls  = 0, piAllTimeTokens  = 0;
+  for (const s of ompRaw) {
+    ompAllTimeSessions++;
+    ompAllTimeLlmCalls += s.llmCalls;
+    ompAllTimeTokens   += s.totalTokens;
+  }
+  for (const s of piRaw) {
+    piAllTimeSessions++;
+    piAllTimeLlmCalls += s.llmCalls;
+    piAllTimeTokens   += s.totalTokens;
+  }
 
-  // Sort by most recent first
+  // Billing-period sessions (for AIC credit computation)
+  const allRaw = [...ompRaw, ...piRaw];
+  const billable = allRaw.filter(s => (s.lastTs || s.firstTs) >= billingStart);
   billable.sort((a, b) => b.lastTs - a.lastTs);
 
-  const totalInput        = billable.reduce((s, x) => s + x.totalInput, 0);
-  const totalOutput       = billable.reduce((s, x) => s + x.totalOutput, 0);
-  const totalCacheRead    = billable.reduce((s, x) => s + x.totalCacheRead, 0);
-  const totalCacheWrite   = billable.reduce((s, x) => s + x.totalCacheWrite, 0);
-  const totalLlmCalls     = billable.reduce((s, x) => s + x.llmCalls, 0);
-  const totalPremium      = billable.reduce((s, x) => s + x.premiumRequests, 0);
+  const totalInput      = billable.reduce((s, x) => s + x.totalInput, 0);
+  const totalOutput     = billable.reduce((s, x) => s + x.totalOutput, 0);
+  const totalCacheRead  = billable.reduce((s, x) => s + x.totalCacheRead, 0);
+  const totalCacheWrite = billable.reduce((s, x) => s + x.totalCacheWrite, 0);
+  const totalLlmCalls   = billable.reduce((s, x) => s + x.llmCalls, 0);
+  const totalPremium    = billable.reduce((s, x) => s + x.premiumRequests, 0);
 
   return {
     sessions: billable,
@@ -336,6 +349,12 @@ export async function scanAgentSessions(): Promise<AgentScanResult> {
     totalPremiumRequests: totalPremium,
     ompSessionCount: billable.filter(s => s.source === "omp").length,
     piSessionCount:  billable.filter(s => s.source === "pi").length,
+    ompAllTimeSessions,
+    ompAllTimeLlmCalls,
+    ompAllTimeTokens,
+    piAllTimeSessions,
+    piAllTimeLlmCalls,
+    piAllTimeTokens,
     scanMs: Date.now() - t0,
   };
 }

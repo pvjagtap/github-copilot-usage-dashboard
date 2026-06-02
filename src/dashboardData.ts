@@ -113,12 +113,18 @@ export interface AgentUsageSummary {
   ompLlmCalls: number;
   ompTotalTokens: number;
   ompTotalCredits: number;
+  /** All-time (no billing filter) — historical token volume */
+  ompAllTimeLlmCalls: number;
+  ompAllTimeTokens: number;
 
   // ── Pi coding agent (~/.pi/agent/sessions) ──────────────────
   piSessions: number;
   piLlmCalls: number;
   piTotalTokens: number;
   piTotalCredits: number;
+  /** All-time (no billing filter) — historical token volume */
+  piAllTimeLlmCalls: number;
+  piAllTimeTokens: number;
 
   // ── Cumulative (all sources) ────────────────────────────────
   totalSessions: number;
@@ -613,12 +619,16 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
     ompSessions:    agentScan?.ompSessionCount ?? 0,
     ompLlmCalls:    ompCalls,
     ompTotalTokens: ompTokens,
-    ompTotalCredits: Math.round(ompCredits * 100) / 100,
+    ompTotalCredits:   Math.round(ompCredits * 100) / 100,
+    ompAllTimeLlmCalls: agentScan?.ompAllTimeLlmCalls ?? 0,
+    ompAllTimeTokens:   agentScan?.ompAllTimeTokens   ?? 0,
 
     piSessions:    agentScan?.piSessionCount ?? 0,
     piLlmCalls:    piCalls,
     piTotalTokens: piTokens,
-    piTotalCredits: Math.round(piCredits * 100) / 100,
+    piTotalCredits:    Math.round(piCredits  * 100) / 100,
+    piAllTimeLlmCalls: agentScan?.piAllTimeLlmCalls  ?? 0,
+    piAllTimeTokens:   agentScan?.piAllTimeTokens    ?? 0,
 
     totalSessions: scan.sessions.length + (agentScan?.ompSessionCount ?? 0) + (agentScan?.piSessionCount ?? 0),
     totalCredits:  Math.round(summary.totalCredits * 100) / 100,
