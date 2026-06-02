@@ -10,6 +10,7 @@ export interface OTelRequest {
   promptTokens: number;
   completionTokens: number;
   cachedTokens: number;
+  cacheWriteTokens: number;
   ttftMs: number | null;
 }
 
@@ -35,6 +36,7 @@ export interface ModelStats {
   traceCached: number;
   metricCached: number;
   cached: number;
+  cacheWrite: number;
 }
 
 type StatsListener = (stats: LiveStats) => void;
@@ -158,6 +160,8 @@ function parseTraceGroups(payload: unknown, log?: (msg: string) => void): OTelRe
     );
 
     let cachedTokens: unknown = getAttr(attrs, "gen_ai.usage.cache_read.input_tokens");
+    let cacheWriteTokens: unknown = getAttr(attrs, "gen_ai.usage.cache_creation.input_tokens")
+      ?? getAttr(attrs, "cache_creation_input_tokens");
     let ttft: unknown = getAttr(attrs, "copilot_chat.time_to_first_token");
 
     // Check ALL child spans for any token/timing data missed on the primary span
@@ -178,6 +182,10 @@ function parseTraceGroups(payload: unknown, log?: (msg: string) => void): OTelRe
       }
       if (cachedTokens === undefined) {
         cachedTokens = getAttr(ca, "gen_ai.usage.cache_read.input_tokens");
+      }
+      if (cacheWriteTokens === undefined) {
+        cacheWriteTokens = getAttr(ca, "gen_ai.usage.cache_creation.input_tokens")
+          ?? getAttr(ca, "cache_creation_input_tokens");
       }
       if (ttft === undefined) {
         ttft = getAttr(ca, "copilot_chat.time_to_first_token");
@@ -203,6 +211,7 @@ function parseTraceGroups(payload: unknown, log?: (msg: string) => void): OTelRe
       promptTokens,
       completionTokens,
       cachedTokens: Number(cachedTokens ?? 0),
+      cacheWriteTokens: Number(cacheWriteTokens ?? 0),
       ttftMs: ttft !== undefined ? Number(ttft) : null,
     });
   }
@@ -247,19 +256,20 @@ export class OTelReceiver {
     for (const req of this.requests) {
       const key = req.modelName;
       if (!byModel.has(key)) {
-        byModel.set(key, { model: key, requests: 0, prompt: 0, completion: 0, traceCached: 0, metricCached: 0, cached: 0 });
+        byModel.set(key, { model: key, requests: 0, prompt: 0, completion: 0, traceCached: 0, metricCached: 0, cached: 0, cacheWrite: 0 });
       }
       const m = byModel.get(key)!;
       m.requests++;
       m.prompt += req.promptTokens;
       m.completion += req.completionTokens;
       m.traceCached += req.cachedTokens;
+      m.cacheWrite += req.cacheWriteTokens;
     }
 
     // Add metric cache deltas
     for (const [model, delta] of this.metricDeltas) {
       if (!byModel.has(model)) {
-        byModel.set(model, { model, requests: 0, prompt: 0, completion: 0, traceCached: 0, metricCached: 0, cached: 0 });
+        byModel.set(model, { model, requests: 0, prompt: 0, completion: 0, traceCached: 0, metricCached: 0, cached: 0, cacheWrite: 0 });
       }
       byModel.get(model)!.metricCached = delta;
     }

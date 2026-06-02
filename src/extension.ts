@@ -243,7 +243,7 @@ function updateStatusBar(): void {
     let otelModel = "unknown";
     let maxTokens = 0;
     for (const m of otel.byModel.values()) {
-      const usage = calculator.calculateCredits(m.model, m.prompt, m.completion, m.cached);
+      const usage = calculator.calculateCredits(m.model, m.prompt, m.completion, m.cached, m.cacheWrite);
       otelAIC += usage.totalCredits;
       otelPrompt += m.prompt;
       otelOutput += m.completion;
@@ -312,7 +312,7 @@ function updateStatusBar(): void {
   let lastRequestAIC = 0;
   if (otel && otel.lastRequest) {
     const lr = otel.lastRequest;
-    const reqCredits = calculator.calculateCredits(lr.modelName, lr.promptTokens, lr.completionTokens, lr.cachedTokens);
+    const reqCredits = calculator.calculateCredits(lr.modelName, lr.promptTokens, lr.completionTokens, lr.cachedTokens, lr.cacheWriteTokens);
     lastRequestAIC = Math.round(reqCredits.totalCredits * 100) / 100;
   }
 

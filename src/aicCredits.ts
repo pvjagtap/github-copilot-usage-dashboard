@@ -297,28 +297,38 @@ export class AICCalculator {
 
   /**
    * Find the best matching cost rate for a model name.
-   * Uses substring matching for flexibility (e.g., "claude-opus-4-6" matches "claude-opus-4").
+   * Uses substring matching for flexibility with normalization:
+   * OTel reports model names with hyphens (e.g., "claude-opus-4-6") while the
+   * rate table uses dots (e.g., "claude-opus-4.6"). We normalize version
+   * separators before matching.
    */
   findModelRate(modelName: string): ModelCostRate | null {
     const lower = modelName.toLowerCase();
 
-    // Exact match first
+    // Normalize: replace version-number hyphens with dots
+    // "claude-opus-4-6" → "claude-opus-4.6", "gpt-4o-mini" stays unchanged
+    const normalized = lower.replace(/(\d)-(\d)/g, "$1.$2");
+
+    // Exact match first (try both original and normalized)
     if (this.modelCosts.has(lower)) {
       return this.modelCosts.get(lower)!;
     }
+    if (normalized !== lower && this.modelCosts.has(normalized)) {
+      return this.modelCosts.get(normalized)!;
+    }
 
-    // Substring match: find longest matching key
+    // Substring match: find longest matching key (try both forms)
     let bestMatch: ModelCostRate | null = null;
     let bestLen = 0;
     for (const [key, rate] of this.modelCosts) {
-      if (lower.includes(key) && key.length > bestLen) {
+      if ((normalized.includes(key) || lower.includes(key)) && key.length > bestLen) {
         bestMatch = rate;
         bestLen = key.length;
       }
       // Also check if the key includes the input (for short model names)
-      if (key.includes(lower) && lower.length > bestLen) {
+      if ((key.includes(normalized) || key.includes(lower)) && normalized.length > bestLen) {
         bestMatch = rate;
-        bestLen = lower.length;
+        bestLen = normalized.length;
       }
     }
 
@@ -333,6 +343,7 @@ export class AICCalculator {
     inputTokens: number,
     outputTokens: number,
     cachedTokens: number = 0,
+    cacheWriteTokens: number = 0,
   ): CreditUsage {
     const rate = this.findModelRate(modelName);
 
@@ -346,10 +357,10 @@ export class AICCalculator {
         cacheWriteCreditsPerMillion: 0,
         tier: "base",
       };
-      return this._compute(defaultRate, inputTokens, outputTokens, cachedTokens);
+      return this._compute(defaultRate, inputTokens, outputTokens, cachedTokens, cacheWriteTokens);
     }
 
-    return this._compute(rate, inputTokens, outputTokens, cachedTokens);
+    return this._compute(rate, inputTokens, outputTokens, cachedTokens, cacheWriteTokens);
   }
 
   private _compute(
@@ -357,19 +368,22 @@ export class AICCalculator {
     inputTokens: number,
     outputTokens: number,
     cachedTokens: number,
+    cacheWriteTokens: number,
   ): CreditUsage {
-    // Net input = total input - cached (cached billed at discounted rate)
-    const netInput = Math.max(0, inputTokens - cachedTokens);
+    // Net input = total input - cached - cache_write
+    // (prompt_tokens from the API includes cached reads AND cache writes)
+    const netInput = Math.max(0, inputTokens - cachedTokens - cacheWriteTokens);
 
     const inputCredits = (netInput / 1_000_000) * rate.inputCreditsPerMillion;
     const outputCredits = (outputTokens / 1_000_000) * rate.outputCreditsPerMillion;
     const cachedCredits = (cachedTokens / 1_000_000) * rate.cachedInputCreditsPerMillion;
+    const cacheWriteCredits = (cacheWriteTokens / 1_000_000) * rate.cacheWriteCreditsPerMillion;
 
     return {
       inputCredits,
       outputCredits,
       cachedCredits,
-      totalCredits: inputCredits + outputCredits + cachedCredits,
+      totalCredits: inputCredits + outputCredits + cachedCredits + cacheWriteCredits,
       model: rate.model,
       tier: rate.tier,
     };

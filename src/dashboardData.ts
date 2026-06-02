@@ -326,14 +326,14 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
     // Compute session-cumulative AIC from live OTel
     let sessionAIC = 0;
     for (const m of liveStats.byModel.values()) {
-      const usage = calculator.calculateCredits(m.model, m.prompt, m.completion, m.cached);
+      const usage = calculator.calculateCredits(m.model, m.prompt, m.completion, m.cached, m.cacheWrite);
       sessionAIC += usage.totalCredits;
     }
     // Compute last request AIC
     let lastRequestAIC = 0;
     if (liveStats.lastRequest) {
       const lr = liveStats.lastRequest;
-      const reqCredits = calculator.calculateCredits(lr.modelName, lr.promptTokens, lr.completionTokens, lr.cachedTokens);
+      const reqCredits = calculator.calculateCredits(lr.modelName, lr.promptTokens, lr.completionTokens, lr.cachedTokens, lr.cacheWriteTokens);
       lastRequestAIC = reqCredits.totalCredits;
     }
     liveOtel = {

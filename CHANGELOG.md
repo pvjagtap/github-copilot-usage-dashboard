@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-06-02
+
+### Fixed
+- **Cache write credits now included in OTel AIC calculation**: The credit formula was missing `cache_creation_input_tokens × cacheWriteCreditsPerMillion` (625/1M for Anthropic models). This caused the live OTel credit display to under-report by the cache-write component, explaining the gap between VS Code's native credit display and our extension's AIC numbers.
+- **OTel now captures `cache_creation_input_tokens`**: Added extraction of `gen_ai.usage.cache_creation.input_tokens` from OTel trace spans, threaded through to `calculateCredits()` at all call sites.
+
+## [1.5.9] - 2026-06-02
+
+### Fixed
+- **OTel model name matching**: `findModelRate()` now normalizes version-number hyphens to dots before lookup. OTel reports models as `claude-opus-4-6` (hyphens) while the rate table uses `claude-opus-4.6` (dots) — previously caused fallback to wrong rates and ~47% drift in live OTel credit display.
+
 ## [1.5.8] - 2026-06-02
 
 ### Fixed
