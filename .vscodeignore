@@ -7,6 +7,8 @@ gen-icon.ps1
 images/image.png
 images/icon.svg
 images/icon-512.png
+.history
+copilot_all_tools.jsonl
 **/*.ts
 **/*.map
 **/*.vsix

@@ -11,7 +11,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/VS%20Code-1.85%2B-blue?logo=visualstudiocode" alt="VS Code 1.85+">
   <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License">
-  <img src="https://img.shields.io/badge/Version-1.3.0-purple" alt="Version">
+  <img src="https://img.shields.io/badge/Version-1.5.8-purple" alt="Version">
 </p>
 
 ---
@@ -48,10 +48,15 @@ Open: **Command Palette** > `Copilot Usage: Open Dashboard`
 ## Data Sources
 
 1. **chatSessions JSONL** at `%APPDATA%/Code/User/workspaceStorage/{hash}/chatSessions/*.jsonl`
-2. **Transcripts** at `%APPDATA%/Code/User/workspaceStorage/{hash}/GitHub.copilot-chat/transcripts/`
-3. **Live OTel** (optional) -- built-in OTLP HTTP receiver on port 14318
+2. **Debug-logs** at `%APPDATA%/Code/User/workspaceStorage/{hash}/GitHub.copilot-chat/debug-logs/{session}/`
+   - `main.jsonl` — per-turn LLM call data with actual token counts and `copilotUsageNanoAiu` (exact API billing)
+   - `runSubagent-*.jsonl` — subagent/child session LLM calls (aggregated into parent session totals)
+   - `title-*.jsonl` — title-generation calls
+3. **Transcripts** at `%APPDATA%/Code/User/workspaceStorage/{hash}/GitHub.copilot-chat/transcripts/`
+4. **Live OTel** (optional) — built-in OTLP HTTP receiver on port 14318
 
 The scanner handles both legacy (`kind=1`) and current (`kind=0`) JSONL formats.
+All file I/O is fully async with concurrent reads (16-worker pool) and mtime caching.
 
 ## Configuration
 
@@ -67,7 +72,7 @@ A VS Code reload is needed after first install for Copilot to start exporting te
 
 ### AI Credits (AIC) Configuration
 
-Since June 1, 2025, GitHub Copilot uses [usage-based billing with AI Credits](https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-organizations-and-enterprises).
+Since June 1, 2026, GitHub Copilot uses [usage-based billing with AI Credits](https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-organizations-and-enterprises).
 
 Configure your plan in **Settings** → search `copilotUsage.aic`:
 

@@ -2,3 +2,5 @@ node_modules/
 out/
 *.vsix
 gen-icon.ps1
+copilot_all_tools.jsonl
+.history/

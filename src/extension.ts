@@ -58,7 +58,7 @@ function buildData(): DashboardData {
 async function runScan(): Promise<void> {
   try {
     const t0 = Date.now();
-    lastScan = scanWorkspaceStorage();
+    lastScan = await scanWorkspaceStorage();
     cachedDashData = undefined; // Invalidate cache
     const elapsed = Date.now() - t0;
     output.appendLine(`Scan: ${lastScan.stats.canonicalSessions} sessions, ${lastScan.stats.turnsStored} turns, ${lastScan.stats.toolCallsStored} tools (${elapsed}ms)`);
@@ -122,12 +122,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           output.appendLine(`Removed outfile setting (was: ${currentOutfile}) — relay handles JSONL output`);
         }
         output.appendLine(`Updated OTel settings: endpoint=${expectedEndpoint}`);
-        vscode.window.showInformationMessage(
+        void vscode.window.showInformationMessage(
           `Copilot Usage: OTel receiver on port ${port}. Reload VS Code once for Copilot to start exporting.`,
           "Reload Window",
         ).then(choice => {
           if (choice === "Reload Window") {
-            vscode.commands.executeCommand("workbench.action.reloadWindow");
+            void vscode.commands.executeCommand("workbench.action.reloadWindow");
           }
         });
       } else {
@@ -178,7 +178,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Handle file open requests from dashboard webview
   DashboardPanel.onOpenFile = (filePath: string) => {
     const uri = vscode.Uri.file(filePath);
-    vscode.workspace.openTextDocument(uri).then(
+    void vscode.workspace.openTextDocument(uri).then(
       doc => vscode.window.showTextDocument(doc, { preview: true, preserveFocus: false }),
       err => {
         output.appendLine(`Failed to open file: ${filePath} — ${err}`);
@@ -188,21 +188,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   // Handle manual refresh from dashboard webview
-  DashboardPanel.onManualRefresh = async () => {
-    await runScan();
-    updateStatusBar();
-    DashboardPanel.updateIfVisible(buildData());
-    output.appendLine('Manual refresh triggered from dashboard');
+  DashboardPanel.onManualRefresh = () => {
+    void runScan().then(() => {
+      updateStatusBar();
+      DashboardPanel.updateIfVisible(buildData());
+      output.appendLine('Manual refresh triggered from dashboard');
+    });
   };
 
   // Handle refresh rate changes from dashboard webview
   DashboardPanel.onRefreshRateChange = (intervalMs: number) => {
     if (scanTimer) { clearInterval(scanTimer); scanTimer = undefined; }
     if (intervalMs > 0) {
-      scanTimer = setInterval(async () => {
-        await runScan();
-        updateStatusBar();
-        DashboardPanel.updateIfVisible(buildData());
+      scanTimer = setInterval(() => {
+        void runScan().then(() => {
+          updateStatusBar();
+          DashboardPanel.updateIfVisible(buildData());
+        });
       }, intervalMs);
       output.appendLine(`Dashboard refresh rate set to ${intervalMs / 1000}s`);
     } else {
@@ -211,10 +213,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   // Periodic rescan of chatSession files
-  scanTimer = setInterval(async () => {
-    await runScan();
-    updateStatusBar();
-    DashboardPanel.updateIfVisible(buildData());
+  scanTimer = setInterval(() => {
+    void runScan().then(() => {
+      updateStatusBar();
+      DashboardPanel.updateIfVisible(buildData());
+    });
   }, DEFAULT_REFRESH_MS);
   context.subscriptions.push({ dispose: () => { if (scanTimer) { clearInterval(scanTimer); } } });
 }

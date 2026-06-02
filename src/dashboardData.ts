@@ -5,7 +5,7 @@
 
 import { ScanResult, Session, Turn, ToolCall, Subagent, ScanStats } from "./scanner";
 import { LiveStats } from "./otelReceiver";
-import { AICCalculator, AICConfig, CreditSummary, DEFAULT_AIC_CONFIG, createCalculatorFromConfig, getPromoInfo } from "./aicCredits";
+import { AICCalculator, AICConfig, DEFAULT_AIC_CONFIG, createCalculatorFromConfig, getPromoInfo } from "./aicCredits";
 
 /**
  * AIC billing effective date. Only sessions/turns on or after this date

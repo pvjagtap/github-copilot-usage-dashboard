@@ -39,6 +39,16 @@ export interface ModelStats {
 
 type StatsListener = (stats: LiveStats) => void;
 
+// ─── Safe JSON Helpers ────────────────────────────────────────
+
+function isObj(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
+function isArr(v: unknown): v is unknown[] {
+  return Array.isArray(v);
+}
+
 function utcNow(): string {
   return new Date().toISOString();
 }
@@ -52,33 +62,47 @@ function nsToIso(ns: string): string {
   }
 }
 
-function getAttr(attributes: any[], key: string): any {
-  if (!Array.isArray(attributes)) { return undefined; }
+/** Extract typed attribute value from OTel attribute array. */
+function getAttr(attributes: unknown, key: string): unknown {
+  if (!isArr(attributes)) { return undefined; }
   for (const item of attributes) {
-    if (item?.key !== key) { continue; }
-    const v = item?.value;
-    if (!v || typeof v !== "object") { return v; }
-    for (const k of ["stringValue", "intValue", "doubleValue", "boolValue"]) {
+    if (!isObj(item) || item.key !== key) { continue; }
+    const v = item.value;
+    if (!isObj(v)) { return v; }
+    for (const k of ["stringValue", "intValue", "doubleValue", "boolValue"] as const) {
       if (k in v) { return v[k]; }
     }
   }
   return undefined;
 }
 
-function isToolSpan(span: any): boolean {
-  const attrs = span?.attributes ?? [];
+function isToolSpan(span: unknown): boolean {
+  if (!isObj(span)) { return false; }
+  const attrs = span.attributes ?? [];
   return ["tool.name", "gen_ai.tool.name", "tool.type"].some(k => getAttr(attrs, k) !== undefined);
 }
 
-function parseTraceGroups(payload: any, log?: (msg: string) => void): OTelRequest[] {
-  const grouped = new Map<string, any[]>();
+function parseTraceGroups(payload: unknown, log?: (msg: string) => void): OTelRequest[] {
+  const grouped = new Map<string, Record<string, unknown>[]>();
   let totalSpans = 0;
 
-  for (const rs of payload?.resourceSpans ?? []) {
-    for (const ss of rs?.scopeSpans ?? []) {
-      for (const span of ss?.spans ?? []) {
-        const tid = span?.traceId;
-        if (!tid) { continue; }
+  if (!isObj(payload)) { return []; }
+
+  const resourceSpans = payload.resourceSpans;
+  if (!isArr(resourceSpans)) { return []; }
+
+  for (const rs of resourceSpans) {
+    if (!isObj(rs)) { continue; }
+    const scopeSpans = rs.scopeSpans;
+    if (!isArr(scopeSpans)) { continue; }
+    for (const ss of scopeSpans) {
+      if (!isObj(ss)) { continue; }
+      const spans = ss.spans;
+      if (!isArr(spans)) { continue; }
+      for (const span of spans) {
+        if (!isObj(span)) { continue; }
+        const tid = span.traceId;
+        if (typeof tid !== "string" || !tid) { continue; }
         if (!grouped.has(tid)) { grouped.set(tid, []); }
         grouped.get(tid)!.push(span);
         totalSpans++;
@@ -111,11 +135,13 @@ function parseTraceGroups(payload: any, log?: (msg: string) => void): OTelReques
     if (!primary) { continue; }
 
     const attrs = primary.attributes ?? [];
-    const model = getAttr(attrs, "gen_ai.response.model")
+    const model = String(
+      getAttr(attrs, "gen_ai.response.model")
       ?? getAttr(attrs, "gen_ai.request.model")
       ?? getAttr(attrs, "llm.response.model")
       ?? getAttr(attrs, "llm.request.model")
-      ?? "unknown";
+      ?? "unknown"
+    );
 
     let promptTokens = Number(
       getAttr(attrs, "gen_ai.usage.prompt_tokens")
@@ -131,8 +157,8 @@ function parseTraceGroups(payload: any, log?: (msg: string) => void): OTelReques
       ?? 0
     );
 
-    let cachedTokens: number | undefined = getAttr(attrs, "gen_ai.usage.cache_read.input_tokens");
-    let ttft: number | undefined = getAttr(attrs, "copilot_chat.time_to_first_token");
+    let cachedTokens: unknown = getAttr(attrs, "gen_ai.usage.cache_read.input_tokens");
+    let ttft: unknown = getAttr(attrs, "copilot_chat.time_to_first_token");
 
     // Check ALL child spans for any token/timing data missed on the primary span
     for (const span of spans) {
@@ -160,17 +186,19 @@ function parseTraceGroups(payload: any, log?: (msg: string) => void): OTelReques
     }
 
     if (!promptTokens && !completionTokens && cachedTokens === undefined && ttft === undefined) {
-      const opName = getAttr(attrs, "gen_ai.operation.name") ?? "";
-      const attrKeys = (attrs as any[]).map((a: any) => a?.key).filter(Boolean).join(",");
+      const opName = String(getAttr(attrs, "gen_ai.operation.name") ?? "");
+      const attrKeys = isArr(attrs)
+        ? attrs.map(a => isObj(a) ? String(a.key ?? "") : "").filter(Boolean).join(",")
+        : "";
       log?.(`OTel: skipping trace (model=${model}, op=${opName}, spans=${spans.length}, no token data; keys=[${attrKeys}])`);
       continue;
     }
 
     results.push({
-      requestId: primary.spanId ?? traceId,
+      requestId: typeof primary.spanId === "string" ? primary.spanId : traceId,
       traceId,
-      conversationId: getAttr(attrs, "gen_ai.conversation.id") ?? "",
-      timestamp: nsToIso(primary.startTimeUnixNano ?? "0"),
+      conversationId: String(getAttr(attrs, "gen_ai.conversation.id") ?? ""),
+      timestamp: nsToIso(String(primary.startTimeUnixNano ?? "0")),
       modelName: model,
       promptTokens,
       completionTokens,
@@ -189,7 +217,15 @@ function parseTraceGroups(payload: any, log?: (msg: string) => void): OTelReques
 type LogFn = (msg: string) => void;
 
 export class OTelReceiver {
+  /** Maximum retained requests before oldest are pruned. */
+  private static readonly MAX_REQUESTS = 10_000;
+
   private requests: OTelRequest[] = [];
+  /** Cumulative counters — never pruned, always accurate */
+  private cumulativeRequests = 0;
+  private cumulativePrompt = 0;
+  private cumulativeCompletion = 0;
+  private cumulativeCached = 0;
   private metricState = new Map<string, number>();
   private metricDeltas = new Map<string, number>(); // model -> cumulative cached delta
   private server: http.Server | null = null;
@@ -233,13 +269,13 @@ export class OTelReceiver {
       m.cached = m.metricCached || m.traceCached;
     }
 
-    const prompt = this.requests.reduce((s, r) => s + r.promptTokens, 0);
-    const completion = this.requests.reduce((s, r) => s + r.completionTokens, 0);
-    const traceCached = this.requests.reduce((s, r) => s + r.cachedTokens, 0);
+    const prompt = this.cumulativePrompt;
+    const completion = this.cumulativeCompletion;
+    const traceCached = this.cumulativeCached;
     const metricCached = Array.from(this.metricDeltas.values()).reduce((s, v) => s + v, 0);
 
     return {
-      requests: this.requests.length,
+      requests: this.cumulativeRequests,
       prompt,
       completion,
       cached: metricCached || traceCached,
@@ -251,25 +287,43 @@ export class OTelReceiver {
     };
   }
 
-  private processMetrics(payload: any): number {
+  private processMetrics(payload: unknown): number {
     let inserted = 0;
+    if (!isObj(payload)) { return 0; }
 
-    for (const rm of payload?.resourceMetrics ?? []) {
-      for (const sm of rm?.scopeMetrics ?? []) {
-        for (const metric of sm?.metrics ?? []) {
-          if (metric?.name !== "gen_ai.client.token.usage") { continue; }
+    const resourceMetrics = payload.resourceMetrics;
+    if (!isArr(resourceMetrics)) { return 0; }
 
-          const points = metric?.histogram?.dataPoints ?? metric?.sum?.dataPoints ?? [];
+    for (const rm of resourceMetrics) {
+      if (!isObj(rm)) { continue; }
+      const scopeMetrics = rm.scopeMetrics;
+      if (!isArr(scopeMetrics)) { continue; }
+      for (const sm of scopeMetrics) {
+        if (!isObj(sm)) { continue; }
+        const metrics = sm.metrics;
+        if (!isArr(metrics)) { continue; }
+        for (const metric of metrics) {
+          if (!isObj(metric) || metric.name !== "gen_ai.client.token.usage") { continue; }
+
+          const histogram = isObj(metric.histogram) ? metric.histogram : undefined;
+          const sum = isObj(metric.sum) ? metric.sum : undefined;
+          const points = isArr(histogram?.dataPoints) ? histogram.dataPoints
+            : isArr(sum?.dataPoints) ? sum.dataPoints : [];
+          if (!isArr(points)) { continue; }
+
           for (const point of points) {
-            const attrs = point?.attributes ?? [];
+            if (!isObj(point)) { continue; }
+            const attrs = point.attributes ?? [];
             const tokenType = String(getAttr(attrs, "gen_ai.token.type") ?? "");
-            const model = getAttr(attrs, "gen_ai.response.model")
+            const model = String(
+              getAttr(attrs, "gen_ai.response.model")
               ?? getAttr(attrs, "gen_ai.request.model")
-              ?? "unknown";
+              ?? "unknown"
+            );
 
             if (!tokenType.toLowerCase().includes("cache")) { continue; }
 
-            const cumSum = point?.sum ?? point?.asDouble ?? point?.asInt;
+            const cumSum = point.sum ?? point.asDouble ?? point.asInt;
             if (cumSum === undefined || cumSum === null) { continue; }
 
             const key = `gen_ai.client.token.usage:${model}:${tokenType}`;
@@ -294,12 +348,12 @@ export class OTelReceiver {
   }
 
   private readChunkedBody(req: http.IncomingMessage): Promise<Buffer> {
-    return new Promise((resolve, reject) => {
-      const chunks: Buffer[] = [];
-      req.on("data", (chunk: Buffer) => chunks.push(chunk));
-      req.on("end", () => resolve(Buffer.concat(chunks)));
-      req.on("error", reject);
-    });
+    const { promise, resolve, reject } = Promise.withResolvers<Buffer>();
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+    return promise;
   }
 
   private notify(): void {
@@ -309,113 +363,126 @@ export class OTelReceiver {
     }
   }
 
+  private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const contentType = req.headers["content-type"] ?? "";
+    this._log(`OTel HTTP: ${req.method} ${req.url} content-type=${contentType}`);
+
+    if (req.method === "GET" && req.url === "/healthz") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+
+    if (req.method !== "POST") {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "not found" }));
+      return;
+    }
+
+    const body = await this.readChunkedBody(req);
+    this._log(`OTel body: ${body.length} bytes, url=${req.url}`);
+    let payload: unknown = {};
+
+    if (body.length > 0) {
+      // Try JSON first, then attempt protobuf-like detection
+      const isProtobuf = contentType.includes("protobuf") || contentType.includes("proto");
+      if (isProtobuf) {
+        this._log(`OTel: received protobuf content-type (${contentType}), cannot parse — Copilot is sending protobuf instead of JSON`);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, note: "protobuf not supported, use JSON" }));
+        return;
+      }
+      try {
+        payload = JSON.parse(body.toString("utf-8")) as unknown;
+      } catch {
+        const firstByte = body[0];
+        if (firstByte !== 0x7b /* '{' */) {
+          this._log(`OTel: body is not JSON (first byte=0x${firstByte?.toString(16)}), likely protobuf binary`);
+        }
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "invalid JSON" }));
+        return;
+      }
+    }
+
+    if (req.url === "/v1/traces") {
+      const parsed = parseTraceGroups(payload, this._log.bind(this));
+      const existing = new Set(this.requests.map(r => r.requestId));
+      const newReqs = parsed.filter(r => !existing.has(r.requestId));
+      this._log(`OTel traces: parsed=${parsed.length}, new=${newReqs.length}`);
+      this.requests.push(...newReqs);
+      // Update cumulative counters (never affected by pruning)
+      for (const r of newReqs) {
+        this.cumulativeRequests++;
+        this.cumulativePrompt += r.promptTokens;
+        this.cumulativeCompletion += r.completionTokens;
+        this.cumulativeCached += r.cachedTokens;
+      }
+      // Prune oldest requests when exceeding retention cap
+      if (this.requests.length > OTelReceiver.MAX_REQUESTS) {
+        this.requests = this.requests.slice(-OTelReceiver.MAX_REQUESTS);
+      }
+      this.notify();
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, inserted: newReqs.length }));
+      return;
+    }
+
+    if (req.url === "/v1/metrics") {
+      const inserted = this.processMetrics(payload);
+      if (inserted > 0) { this.notify(); }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, inserted }));
+      return;
+    }
+
+    if (req.url === "/v1/logs") {
+      this._log(`OTel logs: accepted`);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "not found" }));
+  }
+
   async start(port = 14318): Promise<number> {
-    return new Promise((resolve, reject) => {
-      this.server = http.createServer(async (req, res) => {
-        const contentType = req.headers["content-type"] ?? "";
-        this._log(`OTel HTTP: ${req.method} ${req.url} content-type=${contentType}`);
+    const { promise, resolve, reject } = Promise.withResolvers<number>();
 
-        if (req.method === "GET" && req.url === "/healthz") {
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ ok: true }));
-          return;
-        }
-
-        if (req.method !== "POST") {
-          res.writeHead(404, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "not found" }));
-          return;
-        }
-
-        try {
-          const body = await this.readChunkedBody(req);
-          this._log(`OTel body: ${body.length} bytes, url=${req.url}`);
-          let payload: any = {};
-
-          if (body.length > 0) {
-            // Try JSON first, then attempt protobuf-like detection
-            const isProtobuf = contentType.includes("protobuf") || contentType.includes("proto");
-            if (isProtobuf) {
-              this._log(`OTel: received protobuf content-type (${contentType}), cannot parse — Copilot is sending protobuf instead of JSON`);
-              // Accept the request so Copilot keeps sending, but log the issue
-              res.writeHead(200, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ ok: true, note: "protobuf not supported, use JSON" }));
-              return;
-            }
-            try {
-              payload = JSON.parse(body.toString("utf-8"));
-            } catch {
-              // Check if it looks like protobuf (binary data)
-              const firstByte = body[0];
-              if (firstByte !== 0x7b /* '{' */) {
-                this._log(`OTel: body is not JSON (first byte=0x${firstByte?.toString(16)}), likely protobuf binary`);
-              }
-              res.writeHead(400, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ error: "invalid JSON" }));
-              return;
-            }
-          }
-
-          if (req.url === "/v1/traces") {
-            const parsed = parseTraceGroups(payload, this._log.bind(this));
-            // Deduplicate by requestId
-            const existing = new Set(this.requests.map(r => r.requestId));
-            const newReqs = parsed.filter(r => !existing.has(r.requestId));
-            this._log(`OTel traces: parsed=${parsed.length}, new=${newReqs.length}`);
-            this.requests.push(...newReqs);
-            this.notify();
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ ok: true, inserted: newReqs.length }));
-            return;
-          }
-
-          if (req.url === "/v1/metrics") {
-            const inserted = this.processMetrics(payload);
-            if (inserted > 0) { this.notify(); }
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ ok: true, inserted }));
-            return;
-          }
-
-          if (req.url === "/v1/logs") {
-            this._log(`OTel logs: accepted`);
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ ok: true }));
-            return;
-          }
-
-          res.writeHead(404, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "not found" }));
-        } catch {
+    this.server = http.createServer((req, res) => {
+      this.handleRequest(req, res).catch(() => {
+        if (!res.headersSent) {
           res.writeHead(500, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "internal error" }));
         }
       });
-
-      // Try candidate ports
-      const tryPort = (p: number, attempts: number) => {
-        this.server!.once("error", (err: any) => {
-          if (err.code === "EADDRINUSE" && attempts > 0) {
-            tryPort(p + 1, attempts - 1);
-          } else {
-            reject(err);
-          }
-        });
-        this.server!.listen(p, "127.0.0.1", () => {
-          this._port = p;
-          // Self-test: verify we can reach our own endpoint
-          http.get(`http://127.0.0.1:${p}/healthz`, (testRes) => {
-            testRes.resume();
-            this._log(`OTel receiver self-test: HTTP ${testRes.statusCode} — server is reachable at 127.0.0.1:${p}`);
-          }).on("error", (err: Error) => {
-            this._log(`OTel receiver self-test FAILED: ${err.message} — receiver may not be reachable`);
-          });
-          resolve(p);
-        });
-      };
-
-      tryPort(port, 5);
     });
+
+    // Try candidate ports
+    const tryPort = (p: number, attempts: number) => {
+      this.server!.once("error", (err: NodeJS.ErrnoException) => {
+        if (err.code === "EADDRINUSE" && attempts > 0) {
+          tryPort(p + 1, attempts - 1);
+        } else {
+          reject(err);
+        }
+      });
+      this.server!.listen(p, "127.0.0.1", () => {
+        this._port = p;
+        // Self-test: verify we can reach our own endpoint
+        http.get(`http://127.0.0.1:${p}/healthz`, (testRes) => {
+          testRes.resume();
+          this._log(`OTel receiver self-test: HTTP ${testRes.statusCode} — server is reachable at 127.0.0.1:${p}`);
+        }).on("error", (err: Error) => {
+          this._log(`OTel receiver self-test FAILED: ${err.message} — receiver may not be reachable`);
+        });
+        resolve(p);
+      });
+    };
+
+    tryPort(port, 5);
+    return promise;
   }
 
   stop(): void {
