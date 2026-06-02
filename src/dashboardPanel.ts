@@ -207,6 +207,7 @@ td { padding: 8px; border-bottom: 1px solid var(--border); font-size: 12px; }
 <div class="stats-row" id="stats-row"></div>
 <div id="live-otel-section"></div>
 <div id="aic-section"></div>
+<div id="agent-section"></div>
 <div class="charts-grid" id="charts-grid">
   <div class="chart-card"><h3>By Model</h3><div class="chart-frame chart-frame-pie"><canvas id="modelChart"></canvas></div></div>
   <div class="chart-card"><h3>All Projects by Tokens</h3><div class="chart-scroll"><div class="chart-tall" id="projectChartFrame"><canvas id="projectChart"></canvas></div></div></div>
@@ -385,6 +386,7 @@ function render() {
 
   renderOtel(DATA.liveOtel);
   renderAIC(DATA.aicSummary);
+  renderAgentSessions(DATA.agentSummary);
   renderDaily(daily);
   renderModelPie(sessions);
   renderProjectBar(sessions);
@@ -600,6 +602,25 @@ function renderAIC(aic) {
     + '<div><div class="section-title" style="margin-bottom:8px">Credits by Model</div><table><thead><tr><th>Model</th><th class="num">Input</th><th class="num">Output</th><th class="num">Cached</th><th class="num">Total</th></tr></thead><tbody>'+modelRows+'</tbody></table></div>'
     + '<div>'+calendarHTML+'</div>'
     + '</div></div>';
+}
+
+function renderAgentSessions(agent) {
+  const el = document.getElementById('agent-section');
+  if (!agent || (agent.ompSessions === 0 && agent.piSessions === 0)) {
+    el.innerHTML = '';
+    return;
+  }
+  const fmt2 = v => (+v).toFixed(2);
+  const cards = [
+    {l:'OMP Sessions', v:agent.ompSessions, s:fmt2(agent.ompTotalCredits)+' AIC', c:''},
+    {l:'Pi Sessions',  v:agent.piSessions,  s:fmt2(agent.piTotalCredits)+' AIC',  c:''},
+    {l:'Agent LLM Calls', v:agent.totalLlmCalls, s:'across both agents', c:''},
+    {l:'Agent AIC Total', v:fmt2(agent.totalCredits), s:'included in budget above', c:'orange'},
+  ].map(c=>'<div class="stat-card"><div class="label">'+c.l+'</div><div class="value'+(c.c?' '+c.c:'')+'">'+c.v+'</div><div class="sub">'+c.s+'</div></div>').join('');
+  el.innerHTML = '<div class="table-card"><div class="section-head">'
+    + '<div class="section-title">Agent Sessions — Oh My Pi &amp; Pi</div>'
+    + '<div class="section-subtitle">OMP + Pi coding-agent sessions included in AIC total above</div>'
+    + '</div><div class="stats-row">'+cards+'</div></div>';
 }
 
 function dc(k) {

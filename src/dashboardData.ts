@@ -4,6 +4,7 @@
  */
 
 import { ScanResult, Session, Turn, ToolCall, Subagent, ScanStats } from "./scanner";
+import { AgentScanResult } from "./agentScanner";
 import { LiveStats } from "./otelReceiver";
 import { AICCalculator, AICConfig, DEFAULT_AIC_CONFIG, createCalculatorFromConfig, getPromoInfo } from "./aicCredits";
 
@@ -93,6 +94,19 @@ export interface DashboardData {
   aicSummary: AICDashboardData;
   /** AI Credits for the most recent (current) session */
   currentSessionAIC: number;
+  /** Combined AIC contribution from OMP and Pi agent sessions */
+  agentSummary: AgentUsageSummary;
+}
+
+/** AIC contribution from OMP and Pi coding-agent sessions */
+export interface AgentUsageSummary {
+  ompSessions: number;
+  piSessions: number;
+  ompTotalCredits: number;
+  piTotalCredits: number;
+  totalCredits: number;
+  totalLlmCalls: number;
+  scanMs: number;
 }
 
 /** Serializable AIC data for the webview */
@@ -300,7 +314,7 @@ function computeAllModels(turns: Turn[]): string[] {
 
 // ─── Build Dashboard Data ─────────────────────────────────────
 
-export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null, aicConfig?: AICConfig): DashboardData {
+export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null, aicConfig?: AICConfig, agentScan?: AgentScanResult): DashboardData {
   // Create AIC calculator early so it can be used in session views
   const config = aicConfig ?? DEFAULT_AIC_CONFIG;
   const calculator = createCalculatorFromConfig(config);
@@ -467,6 +481,42 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
     }
   }
 
+  // ─── Agent Session Credit Entries (OMP + Pi) ──────────────────
+  // Include OMP and Pi agent sessions in the shared AIC budget.
+  // Token convention: agent session `input` is NET (excludes cacheRead/cacheWrite).
+  // AICCalculator.calculateCredits expects GROSS input; reconstruct: grossInput = input + cacheRead + cacheWrite.
+  let ompCredits = 0;
+  let piCredits = 0;
+  if (agentScan) {
+    for (const session of agentScan.sessions) {
+      const date = new Date(session.lastTs || session.firstTs).toISOString().slice(0, 10);
+      if (date < AIC_EFFECTIVE_DATE) { continue; }
+      for (const [model, stats] of Object.entries(session.modelBreakdown)) {
+        const grossInput = stats.input + stats.cacheRead + stats.cacheWrite;
+        const usage = calculator.calculateCredits(model, grossInput, stats.output, stats.cacheRead, stats.cacheWrite);
+        creditEntries.push({
+          model,
+          inputTokens: 0,
+          outputTokens: 0,
+          cachedTokens: 0,
+          date,
+          actualCredits: usage.totalCredits,
+        });
+        if (session.source === "omp") { ompCredits += usage.totalCredits; }
+        else { piCredits += usage.totalCredits; }
+      }
+    }
+  }
+  const agentSummary: AgentUsageSummary = {
+    ompSessions:      agentScan?.ompSessionCount ?? 0,
+    piSessions:       agentScan?.piSessionCount  ?? 0,
+    ompTotalCredits:  Math.round(ompCredits * 100) / 100,
+    piTotalCredits:   Math.round(piCredits  * 100) / 100,
+    totalCredits:     Math.round((ompCredits + piCredits) * 100) / 100,
+    totalLlmCalls:    agentScan?.totalLlmCalls ?? 0,
+    scanMs:           agentScan?.scanMs ?? 0,
+  };
+
   const summary = calculator.computeSummary(creditEntries);
 
   // Promo detection: auto-detect if we're in the June 1 – Sept 1, 2026 window
@@ -541,5 +591,6 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
     generatedAt: new Date().toLocaleString('en-CA', { hour12: false, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }).replace(',', ''),
     aicSummary,
     currentSessionAIC,
+    agentSummary,
   };
 }

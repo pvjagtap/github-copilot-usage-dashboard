@@ -3,6 +3,7 @@ import { OTelReceiver } from "./otelReceiver";
 import { StatusBarProvider, CurrentSessionInfo } from "./statusBar";
 import { DashboardPanel } from "./dashboardPanel";
 import { scanWorkspaceStorage, ScanResult } from "./scanner";
+import { scanAgentSessions, AgentScanResult } from "./agentScanner";
 import { buildDashboardData, DashboardData } from "./dashboardData";
 import { AICConfig, DEFAULT_AIC_CONFIG, createCalculatorFromConfig } from "./aicCredits";
 
@@ -15,6 +16,7 @@ let receiver: OTelReceiver | undefined;
 let statusBar: StatusBarProvider | undefined;
 let scanTimer: ReturnType<typeof setInterval> | undefined;
 let lastScan: ScanResult | undefined;
+let lastAgentScan: AgentScanResult | undefined;
 let output: vscode.OutputChannel;
 /** ISO timestamp of when this VS Code instance activated the extension — used to scope "current" to this instance only */
 let activationTime: string;
@@ -47,7 +49,7 @@ function buildData(): DashboardData {
   const t0 = Date.now();
   const scan = lastScan ?? { sessions: [], turns: [], toolCalls: [], subagents: [], stats: { sourceFiles: 0, canonicalSessions: 0, mirroredSessions: 0, mirrorCopiesPruned: 0, turnsStored: 0, toolCallsStored: 0, promptPreviews: 0, transcriptsFound: 0, debugLogSessions: 0 } };
   const aicConfig = getAICConfig();
-  cachedDashData = buildDashboardData(scan, otelStats, aicConfig);
+  cachedDashData = buildDashboardData(scan, otelStats, aicConfig, lastAgentScan);
   const elapsed = Date.now() - t0;
   if (elapsed > 200) {
     output.appendLine(`buildData took ${elapsed}ms (${scan.stats.turnsStored} turns, ${scan.stats.canonicalSessions} sessions)`);
@@ -58,10 +60,17 @@ function buildData(): DashboardData {
 async function runScan(): Promise<void> {
   try {
     const t0 = Date.now();
-    lastScan = await scanWorkspaceStorage();
+    [lastScan, lastAgentScan] = await Promise.all([
+      scanWorkspaceStorage(),
+      scanAgentSessions(),
+    ]);
     cachedDashData = undefined; // Invalidate cache
     const elapsed = Date.now() - t0;
-    output.appendLine(`Scan: ${lastScan.stats.canonicalSessions} sessions, ${lastScan.stats.turnsStored} turns, ${lastScan.stats.toolCallsStored} tools (${elapsed}ms)`);
+    output.appendLine(
+      `Scan: ${lastScan.stats.canonicalSessions} sessions, ${lastScan.stats.turnsStored} turns, ` +
+      `${lastScan.stats.toolCallsStored} tools (${elapsed}ms) | ` +
+      `Agent: OMP=${lastAgentScan.ompSessionCount} Pi=${lastAgentScan.piSessionCount} (${lastAgentScan.scanMs}ms)`,
+    );
   } catch (err) {
     output.appendLine(`Scan error: ${err}`);
   }
