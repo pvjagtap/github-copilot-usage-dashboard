@@ -98,14 +98,31 @@ export interface DashboardData {
   agentSummary: AgentUsageSummary;
 }
 
-/** AIC contribution from OMP and Pi coding-agent sessions */
+/** Per-source usage breakdown: VS Code chatSessions, Oh My Pi agent, Pi coding agent */
 export interface AgentUsageSummary {
+  // ── VS Code (chatSession scanner) ─────────────────────────
+  vscodeSessions: number;
+  vscodeTurns: number;
+  /** Total prompt + output tokens from all VS Code turns */
+  vscodeTotalTokens: number;
+  /** AIC credits attributed to VS Code turns only (aicSummary.totalCredits − OMP − Pi) */
+  vscodeAicCredits: number;
+
+  // ── Oh My Pi agent (~/.omp/agent/sessions) ─────────────────
   ompSessions: number;
-  piSessions: number;
+  ompLlmCalls: number;
+  ompTotalTokens: number;
   ompTotalCredits: number;
+
+  // ── Pi coding agent (~/.pi/agent/sessions) ──────────────────
+  piSessions: number;
+  piLlmCalls: number;
+  piTotalTokens: number;
   piTotalCredits: number;
+
+  // ── Cumulative (all sources) ────────────────────────────────
+  totalSessions: number;
   totalCredits: number;
-  totalLlmCalls: number;
   scanMs: number;
 }
 
@@ -487,10 +504,25 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
   // AICCalculator.calculateCredits expects GROSS input; reconstruct: grossInput = input + cacheRead + cacheWrite.
   let ompCredits = 0;
   let piCredits = 0;
+  let ompTokens = 0;
+  let piTokens = 0;
+  let ompCalls = 0;
+  let piCalls = 0;
   if (agentScan) {
     for (const session of agentScan.sessions) {
       const date = new Date(session.lastTs || session.firstTs).toISOString().slice(0, 10);
       if (date < AIC_EFFECTIVE_DATE) { continue; }
+
+      // Session-level token and call counts (accumulated once per session, not per model)
+      if (session.source === "omp") {
+        ompTokens += session.totalTokens;
+        ompCalls  += session.llmCalls;
+      } else {
+        piTokens += session.totalTokens;
+        piCalls  += session.llmCalls;
+      }
+
+      // Per-model credit entries for AICCalculator
       for (const [model, stats] of Object.entries(session.modelBreakdown)) {
         const grossInput = stats.input + stats.cacheRead + stats.cacheWrite;
         const usage = calculator.calculateCredits(model, grossInput, stats.output, stats.cacheRead, stats.cacheWrite);
@@ -507,15 +539,6 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
       }
     }
   }
-  const agentSummary: AgentUsageSummary = {
-    ompSessions:      agentScan?.ompSessionCount ?? 0,
-    piSessions:       agentScan?.piSessionCount  ?? 0,
-    ompTotalCredits:  Math.round(ompCredits * 100) / 100,
-    piTotalCredits:   Math.round(piCredits  * 100) / 100,
-    totalCredits:     Math.round((ompCredits + piCredits) * 100) / 100,
-    totalLlmCalls:    agentScan?.totalLlmCalls ?? 0,
-    scanMs:           agentScan?.scanMs ?? 0,
-  };
 
   const summary = calculator.computeSummary(creditEntries);
 
@@ -573,6 +596,33 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
       promoEndDate: promoInfo.promoEndDate,
     },
     isActualFromApi: hasActualAic,
+  };
+
+  // ─── Per-Source Usage Summary ─────────────────────────────────
+  // vscodeAicCredits = total − agent contributions (computed here since summary is now available)
+  const vscodeTurnTokens = scan.turns.reduce(
+    (s, t) => s + (t.debugPromptTokens || t.promptTokens) + (t.debugOutputTokens || t.outputTokens),
+    0,
+  );
+  const agentSummary: AgentUsageSummary = {
+    vscodeSessions:    scan.sessions.length,
+    vscodeTurns:       scan.turns.length,
+    vscodeTotalTokens: vscodeTurnTokens,
+    vscodeAicCredits:  Math.round((summary.totalCredits - ompCredits - piCredits) * 100) / 100,
+
+    ompSessions:    agentScan?.ompSessionCount ?? 0,
+    ompLlmCalls:    ompCalls,
+    ompTotalTokens: ompTokens,
+    ompTotalCredits: Math.round(ompCredits * 100) / 100,
+
+    piSessions:    agentScan?.piSessionCount ?? 0,
+    piLlmCalls:    piCalls,
+    piTotalTokens: piTokens,
+    piTotalCredits: Math.round(piCredits * 100) / 100,
+
+    totalSessions: scan.sessions.length + (agentScan?.ompSessionCount ?? 0) + (agentScan?.piSessionCount ?? 0),
+    totalCredits:  Math.round(summary.totalCredits * 100) / 100,
+    scanMs:        agentScan?.scanMs ?? 0,
   };
 
   // Determine current session AIC (most recent session with activity)

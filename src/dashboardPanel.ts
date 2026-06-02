@@ -371,7 +371,11 @@ function render() {
   document.getElementById('subtitle').textContent = 'Updated: '+DATA.generatedAt+' — '+rl+refreshStatus;
   const aicTotal = DATA.aicSummary ? DATA.aicSummary.totalCredits.toFixed(1) : '0';
   const aicBudget = DATA.aicSummary ? DATA.aicSummary.monthlyBudget : 0;
+  const ag = DATA.agentSummary;
   const aicSub = aicBudget > 0 ? aicTotal+'/'+aicBudget+' credits' : 'no budget set';
+  const aicSrcSub = (ag && (ag.ompSessions > 0 || ag.piSessions > 0))
+    ? 'VS Code+OMP+Pi (all sources)'
+    : aicSub;
   document.getElementById('stats-row').innerHTML = [
     {l:'Sessions',v:t.sessions,s:rl.toLowerCase()},
     {l:'Turns',v:t.turns,s:rl},
@@ -379,7 +383,7 @@ function render() {
     {l:'Output Tokens',v:fmt(t.output),s:'generated tokens'},
     {l:'Tool Calls',v:fmt(t.tools),s:'all tool invocations'},
     {l:'Subagent Calls',v:t.subs,s:'runSubagent only'},
-    {l:'AI Credits',v:aicTotal,s:aicSub,c:'orange'},
+    {l:'AI Credits',v:aicTotal,s:aicSrcSub,c:'orange'},
     {l:'Mirrors',v:DATA.scanStats.mirroredSessions,s:DATA.scanStats.mirrorCopiesPruned+' pruned'},
     {l:'Transcripts',v:DATA.scanStats.transcriptsFound,s:DATA.scanStats.promptPreviews+' with previews'},
   ].map(c=>'<div class="stat-card"><div class="label">'+c.l+'</div><div class="value'+(c.c?' '+c.c:'')+'">'+c.v+'</div><div class="sub">'+c.s+'</div></div>').join('');
@@ -606,21 +610,84 @@ function renderAIC(aic) {
 
 function renderAgentSessions(agent) {
   const el = document.getElementById('agent-section');
-  if (!agent || (agent.ompSessions === 0 && agent.piSessions === 0)) {
-    el.innerHTML = '';
-    return;
-  }
-  const fmt2 = v => (+v).toFixed(2);
-  const cards = [
-    {l:'OMP Sessions', v:agent.ompSessions, s:fmt2(agent.ompTotalCredits)+' AIC', c:''},
-    {l:'Pi Sessions',  v:agent.piSessions,  s:fmt2(agent.piTotalCredits)+' AIC',  c:''},
-    {l:'Agent LLM Calls', v:agent.totalLlmCalls, s:'across both agents', c:''},
-    {l:'Agent AIC Total', v:fmt2(agent.totalCredits), s:'included in budget above', c:'orange'},
-  ].map(c=>'<div class="stat-card"><div class="label">'+c.l+'</div><div class="value'+(c.c?' '+c.c:'')+'">'+c.v+'</div><div class="sub">'+c.s+'</div></div>').join('');
+  if (!agent) { el.innerHTML = ''; return; }
+
+  // fmt helpers — inline since they're one-off and used only here
+  const fmtAIC = v => (+v).toFixed(2);
+  const hasAgentData = agent.ompSessions > 0 || agent.piSessions > 0;
+  const agentNote = hasAgentData
+    ? ''
+    : '<div style="margin-top:6px;font-size:11px;color:var(--muted)">No OMP or Pi agent sessions found for this billing period. ' +
+      'Sessions will appear once Oh My Pi or Pi coding-agent activity is detected in ' +
+      '<code>~/.omp/agent/sessions</code> or <code>~/.pi/agent/sessions</code>.</div>';
+
+  // Total row values
+  const totalSess  = agent.totalSessions;
+  const totalCalls = (agent.vscodeTurns||0) + (agent.ompLlmCalls||0) + (agent.piLlmCalls||0);
+  const totalTok   = (agent.vscodeTotalTokens||0) + (agent.ompTotalTokens||0) + (agent.piTotalTokens||0);
+  const totalAIC   = fmtAIC(agent.totalCredits||0);
+
+  const fmtTok = v => {
+    if (v >= 1e9) return (v/1e9).toFixed(2)+'B';
+    if (v >= 1e6) return (v/1e6).toFixed(1)+'M';
+    if (v >= 1e3) return (v/1e3).toFixed(1)+'K';
+    return String(v);
+  };
+
+  // Source badge styles matching the existing model-tag color scheme
+  const srcBadge = (label, color) =>
+    '<span style="display:inline-block;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600;' +
+    'background:'+color+';color:#fff;margin-right:4px">'+label+'</span>';
+
+  const tbody =
+    '<tr>' +
+      '<td>Sessions</td>' +
+      '<td class="num">'+agent.vscodeSessions+'</td>' +
+      '<td class="num">'+(agent.ompSessions||0)+'</td>' +
+      '<td class="num">'+(agent.piSessions||0)+'</td>' +
+      '<td class="num orange"><strong>'+totalSess+'</strong></td>' +
+    '</tr>' +
+    '<tr>' +
+      '<td>Turns / LLM Calls</td>' +
+      '<td class="num">'+(agent.vscodeTurns||0).toLocaleString()+'</td>' +
+      '<td class="num">'+(agent.ompLlmCalls||0).toLocaleString()+'</td>' +
+      '<td class="num">'+(agent.piLlmCalls||0).toLocaleString()+'</td>' +
+      '<td class="num orange"><strong>'+totalCalls.toLocaleString()+'</strong></td>' +
+    '</tr>' +
+    '<tr>' +
+      '<td>Tokens (prompt + output)</td>' +
+      '<td class="num">'+fmtTok(agent.vscodeTotalTokens||0)+'</td>' +
+      '<td class="num">'+fmtTok(agent.ompTotalTokens||0)+'</td>' +
+      '<td class="num">'+fmtTok(agent.piTotalTokens||0)+'</td>' +
+      '<td class="num orange"><strong>'+fmtTok(totalTok)+'</strong></td>' +
+    '</tr>' +
+    '<tr style="border-top:1px solid var(--border)">' +
+      '<td><strong>AIC Credits</strong></td>' +
+      '<td class="num orange">'+fmtAIC(agent.vscodeAicCredits||0)+'</td>' +
+      '<td class="num orange">'+fmtAIC(agent.ompTotalCredits||0)+'</td>' +
+      '<td class="num orange">'+fmtAIC(agent.piTotalCredits||0)+'</td>' +
+      '<td class="num orange"><strong>'+totalAIC+'</strong></td>' +
+    '</tr>';
+
   el.innerHTML = '<div class="table-card"><div class="section-head">'
-    + '<div class="section-title">Agent Sessions — Oh My Pi &amp; Pi</div>'
-    + '<div class="section-subtitle">OMP + Pi coding-agent sessions included in AIC total above</div>'
-    + '</div><div class="stats-row">'+cards+'</div></div>';
+    + '<div class="section-title">Usage by Source'
+    +   ' ' + srcBadge('VS Code','#0078d4')
+    +   ' ' + srcBadge('OMP','#7c3aed')
+    +   ' ' + srcBadge('Pi','#059669')
+    + '</div>'
+    + '<div class="section-subtitle">Per-source breakdown — all AIC credits feed into the shared billing budget above</div>'
+    + '</div>'
+    + '<table><thead><tr>'
+    +   '<th>Metric</th>'
+    +   '<th class="num">VS Code</th>'
+    +   '<th class="num">Oh My Pi</th>'
+    +   '<th class="num">Pi</th>'
+    +   '<th class="num">Total</th>'
+    + '</tr></thead><tbody>'
+    + tbody
+    + '</tbody></table>'
+    + agentNote
+    + '</div>';
 }
 
 function dc(k) {
