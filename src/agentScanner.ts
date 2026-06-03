@@ -195,7 +195,7 @@ function parseAgentSession(
     llmCalls++;
 
     // Per-model token accumulation
-    const callModel = typeof msg["model"] === "string" ? msg["model"] : primaryModel;
+    const callModel = typeof msg["model"] === "string" ? msg["model"] : (primaryModel || "unknown");
     const existing = modelMap.get(callModel);
     if (existing) {
       existing.input += inp;
@@ -304,7 +304,8 @@ async function scanDirectory(
  */
 export async function scanAgentSessions(): Promise<AgentScanResult> {
   const t0 = Date.now();
-  const billingStart = Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1);
+  const now = new Date();
+  const billingStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
 
   const [ompRaw, piRaw] = await Promise.all([
     scanDirectory(getOmpSessionsRoot(), "omp"),
@@ -336,6 +337,14 @@ export async function scanAgentSessions(): Promise<AgentScanResult> {
   const totalCacheWrite = billable.reduce((s, x) => s + x.totalCacheWrite, 0);
   const totalLlmCalls   = billable.reduce((s, x) => s + x.llmCalls, 0);
   const totalPremium    = billable.reduce((s, x) => s + x.premiumRequests, 0);
+
+  // Evict stale cache entries for files that no longer exist on disk.
+  // fileCache only holds successfully parsed sessions, so any key absent from
+  // the current scan corresponds to a deleted (or moved) file.
+  const seenPaths = new Set<string>([...ompRaw, ...piRaw].map(s => s.filePath));
+  for (const key of fileCache.keys()) {
+    if (!seenPaths.has(key)) { fileCache.delete(key); }
+  }
 
   return {
     sessions: billable,

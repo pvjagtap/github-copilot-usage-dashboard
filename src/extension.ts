@@ -60,16 +60,23 @@ function buildData(): DashboardData {
 async function runScan(): Promise<void> {
   try {
     const t0 = Date.now();
-    [lastScan, lastAgentScan] = await Promise.all([
+    const [scanResult, agentResult] = await Promise.all([
       scanWorkspaceStorage(),
-      scanAgentSessions(),
+      scanAgentSessions().catch((err: unknown) => {
+        output.appendLine(`Agent scan error: ${err}`);
+        return undefined as AgentScanResult | undefined;
+      }),
     ]);
+    lastScan = scanResult;
+    lastAgentScan = agentResult;
     cachedDashData = undefined; // Invalidate cache
     const elapsed = Date.now() - t0;
     output.appendLine(
       `Scan: ${lastScan.stats.canonicalSessions} sessions, ${lastScan.stats.turnsStored} turns, ` +
-      `${lastScan.stats.toolCallsStored} tools (${elapsed}ms) | ` +
-      `Agent: OMP=${lastAgentScan.ompSessionCount} Pi=${lastAgentScan.piSessionCount} (${lastAgentScan.scanMs}ms)`,
+      `${lastScan.stats.toolCallsStored} tools (${elapsed}ms)` +
+      (lastAgentScan
+        ? ` | Agent: OMP=${lastAgentScan.ompSessionCount} Pi=${lastAgentScan.piSessionCount} (${lastAgentScan.scanMs}ms)`
+        : " | Agent: scan failed"),
     );
   } catch (err) {
     output.appendLine(`Scan error: ${err}`);

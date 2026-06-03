@@ -655,11 +655,11 @@ function renderAgentSessions(agent) {
       '<td class="num orange"><strong>'+totalCalls.toLocaleString()+'</strong></td>' +
     '</tr>' +
     '<tr>' +
-      '<td>Tokens — prompt + output <span style="font-size:10px;color:var(--muted)">(all time)</span></td>' +
-      '<td class="num">'+fmtTok(agent.vscodeTotalTokens||0)+'</td>' +
-      '<td class="num">'+fmtTok(agent.ompAllTimeTokens||0)+'</td>' +
-      '<td class="num">'+fmtTok(agent.piAllTimeTokens||0)+'</td>' +
-      '<td class="num orange"><strong>'+fmtTok(totalTok)+'</strong></td>' +
+      '<td>Tokens — prompt + output <span style="font-size:10px;color:var(--muted)">(VS Code: workspace storage · OMP/Pi: all time)</span></td>' +
+      '<td class="num" title="All turns retained in VS Code workspace storage">'+fmtTok(agent.vscodeTotalTokens||0)+'</td>' +
+      '<td class="num" title="All-time historical OMP agent tokens">'+fmtTok(agent.ompAllTimeTokens||0)+'</td>' +
+      '<td class="num" title="All-time historical Pi agent tokens">'+fmtTok(agent.piAllTimeTokens||0)+'</td>' +
+      '<td class="num orange" title="Sum across differing retention windows — see column headers"><strong>'+fmtTok(totalTok)+'</strong></td>' +
     '</tr>' +
     '<tr style="border-top:1px solid var(--border)">' +
       '<td><strong>AIC Credits</strong> <span style="font-size:10px;color:var(--muted)">(Jun 1+ only)</span></td>' +
