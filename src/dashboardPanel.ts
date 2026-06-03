@@ -39,18 +39,18 @@ export class DashboardPanel {
       "copilotUsageDashboard",
       "Copilot Usage Dashboard",
       vscode.ViewColumn.One,
-      { enableScripts: true, retainContextWhenHidden: true },
+      { enableScripts: true, retainContextWhenHidden: true }
     );
     this.panel.onDidDispose(() => {
       this.disposed = true;
       DashboardPanel.instance = undefined;
     });
-    this.panel.webview.onDidReceiveMessage((msg) => {
-      if (msg.type === 'refreshRate' && DashboardPanel.onRefreshRateChange) {
+    this.panel.webview.onDidReceiveMessage(msg => {
+      if (msg.type === "refreshRate" && DashboardPanel.onRefreshRateChange) {
         DashboardPanel.onRefreshRateChange(msg.intervalMs);
-      } else if (msg.type === 'manualRefresh' && DashboardPanel.onManualRefresh) {
+      } else if (msg.type === "manualRefresh" && DashboardPanel.onManualRefresh) {
         DashboardPanel.onManualRefresh();
-      } else if (msg.type === 'openFile' && msg.path && DashboardPanel.onOpenFile) {
+      } else if (msg.type === "openFile" && msg.path && DashboardPanel.onOpenFile) {
         DashboardPanel.onOpenFile(msg.path);
       }
     });
@@ -58,14 +58,16 @@ export class DashboardPanel {
   }
 
   update(data: DashboardData): void {
-    if (this.disposed) { return; }
-    this.panel.webview.postMessage({ type: 'updateData', data });
+    if (this.disposed) {
+      return;
+    }
+    this.panel.webview.postMessage({ type: "updateData", data });
   }
 
   private buildHtml(data: DashboardData): string {
     const jsonData = JSON.stringify(data);
 
-    return /*html*/`<!DOCTYPE html>
+    return /*html*/ `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -489,20 +491,20 @@ function buildCreditCalendar(cycleStart, cycleEnd, dayMap) {
       border = '1px solid var(--border)';
       textColor = 'var(--muted)';
     } else if (intensity > 0.8) {
-      bg = 'rgba(255,69,58,0.7)';
-      border = '1px solid rgba(255,69,58,0.9)';
+      bg = 'rgba(48,209,88,0.82)';
+      border = '1px solid rgba(48,209,88,0.95)';
       textColor = '#fff';
     } else if (intensity > 0.5) {
-      bg = 'rgba(255,159,10,0.6)';
-      border = '1px solid rgba(255,159,10,0.8)';
+      bg = 'rgba(48,209,88,0.52)';
+      border = '1px solid rgba(48,209,88,0.72)';
       textColor = '#fff';
     } else if (intensity > 0.2) {
-      bg = 'rgba(48,209,88,0.5)';
-      border = '1px solid rgba(48,209,88,0.7)';
+      bg = 'rgba(255,159,10,0.55)';
+      border = '1px solid rgba(255,159,10,0.75)';
       textColor = '#fff';
     } else {
-      bg = 'rgba(48,209,88,0.2)';
-      border = '1px solid rgba(48,209,88,0.4)';
+      bg = 'rgba(255,69,58,0.35)';
+      border = '1px solid rgba(255,69,58,0.55)';
       textColor = 'var(--fg)';
     }
 
@@ -521,10 +523,10 @@ function buildCreditCalendar(cycleStart, cycleEnd, dayMap) {
   // Legend
   const legend = '<div style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:9px;color:var(--muted)">'
     + '<span>Less</span>'
-    + '<div style="width:10px;height:10px;border-radius:2px;background:rgba(48,209,88,0.2)"></div>'
-    + '<div style="width:10px;height:10px;border-radius:2px;background:rgba(48,209,88,0.5)"></div>'
-    + '<div style="width:10px;height:10px;border-radius:2px;background:rgba(255,159,10,0.6)"></div>'
-    + '<div style="width:10px;height:10px;border-radius:2px;background:rgba(255,69,58,0.7)"></div>'
+    + '<div style="width:10px;height:10px;border-radius:2px;background:rgba(255,69,58,0.35)"></div>'
+    + '<div style="width:10px;height:10px;border-radius:2px;background:rgba(255,159,10,0.55)"></div>'
+    + '<div style="width:10px;height:10px;border-radius:2px;background:rgba(48,209,88,0.52)"></div>'
+    + '<div style="width:10px;height:10px;border-radius:2px;background:rgba(48,209,88,0.82)"></div>'
     + '<span>More</span>'
     + '<span style="margin-left:auto">Month total: <strong style="color:var(--orange)">'+totalMonth.toFixed(1)+'</strong> credits</span>'
     + '</div>';
