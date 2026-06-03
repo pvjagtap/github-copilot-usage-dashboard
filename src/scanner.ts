@@ -269,7 +269,7 @@ function parseSessionContent(content: string, filePath: string, wsHash: string, 
           modelName = typeof meta.name === "string" ? meta.name
             : typeof sel.identifier === "string" ? sel.identifier : "unknown";
           modelFamily = typeof meta.family === "string" ? meta.family : "unknown";
-          modelMultiplier = typeof meta.multiplierNumeric === "number" ? meta.multiplierNumeric : 1;
+          modelMultiplier = typeof meta.multiplierNumeric === "number" ? meta.multiplierNumeric : 0;
           accountLabel = str(meta, "auth", "accountLabel");
         } else {
           modelName = typeof sel.identifier === "string" ? sel.identifier : "unknown";
