@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.1] - 2026-06-03
+
+### Fixed
+- **Agent scan failure no longer stales workspace scan**: `scanAgentSessions()` is now isolated inside its own `.catch()` before `Promise.all` resolves. Previously, if the agent scan threw, the destructuring assignment never executed and `lastScan` retained its previous stale value even though `scanWorkspaceStorage()` had succeeded.
+- **`fileCache` eviction on every scan**: After each scan, entries for files no longer present on disk are removed from the module-level `fileCache` Map. Previously, deleted session files accumulated as stale entries for the extension process lifetime.
+- **Empty-string phantom key in `modelBreakdown`**: When the very first assistant message in a session lacks a `model` field, the fallback is now `"unknown"` instead of `""` (empty string), preventing a spurious `""` key from appearing in the per-model breakdown.
+- **Duplicate `new Date()` in billing-start computation**: `billingStart` now binds `new Date()` once and reuses it for both `.getUTCFullYear()` and `.getUTCMonth()` calls.
+- **Token row time-window ambiguity**: The "Tokens — prompt + output" row in the Usage by Source table now labels its scope as "VS Code: workspace storage · OMP/Pi: all time". Each cell carries a `title` tooltip and the Total cell notes that it sums across differing retention windows.
+
+## [1.7.0] - 2026-06-02
+
+### Added
+- **Per-source AIC breakdown (VS Code · OMP · Pi)**: New "Usage by Source" table in the dashboard shows Sessions, Turns/LLM Calls, Tokens, and AIC Credits split across VS Code Copilot Chat, Oh My Pi agent sessions (`~/.omp/agent/sessions`), and Pi coding-agent sessions (`~/.pi/agent/sessions`). All three sources feed into the shared AIC billing total above the table.
+- **All-time token counts for OMP and Pi**: The Tokens row uses historical all-time token totals for agent sources (not filtered to the current billing period), clearly labelled to distinguish from the billing-period AIC Credits row.
+- **AIC Credits scoped to Jun 1+**: The AIC Credits row is labelled "(Jun 1+ only)" to reflect that usage-based billing began June 1, 2026.
+- **`agentScanner.ts`**: New module that scans OMP and Pi JSONL session files concurrently with mtime caching. Exposes `scanAgentSessions()` returning `AgentScanResult` with per-source session counts, token breakdowns by model, billing-period totals, and all-time totals.
+- **`AgentUsageSummary` in `dashboardData.ts`**: Extended with full per-source fields (`vscodeSessions/Turns/TotalTokens/AicCredits`, `ompSessions/LlmCalls/TotalTokens/TotalCredits/AllTimeLlmCalls/AllTimeTokens`, `piSessions/LlmCalls/TotalTokens/TotalCredits/AllTimeLlmCalls/AllTimeTokens`, `totalSessions/totalCredits/scanMs`).
+
 ## [1.6.0] - 2026-06-02
 
 ### Fixed
