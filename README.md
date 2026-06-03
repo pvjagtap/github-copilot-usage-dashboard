@@ -11,20 +11,23 @@
 <p align="center">
   <img src="https://img.shields.io/badge/VS%20Code-1.85%2B-blue?logo=visualstudiocode" alt="VS Code 1.85+">
   <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License">
-  <img src="https://img.shields.io/badge/Version-1.7.2-purple" alt="Version">
+  <img src="https://img.shields.io/badge/Version-1.7.6-purple" alt="Version">
 </p>
 
 ---
 
 ## Features
 
+- **Unified usage across 3 sources** — VS Code Copilot Chat, [Oh My Pi](https://github.com/pvjagtap/oh-my-pi) (OMP) agent sessions, and Pi coding-agent sessions, all rolled into a single AIC budget view
 - **AI Credits (AIC) tracking** — per-model credit costs with configurable rates (June 2026 billing model)
-- **Budget monitoring** — monthly budget progress bar, projected usage, overage cost estimates
+- **Budget monitoring** — uncapped percentage (shows true overage e.g. `494%`), "days of runway at current pace" indicator, projected end-of-cycle usage, overage cost estimates
+- **Redesigned dashboard (v1.7.6)** — hero KPI cards, tabbed Breakdown (Model / Project / Tool / Subagent), collapsible expanders, side-by-side Trend charts with auto-generated insight captions
 - Token counts (prompt, output, cached) per session, model, project, and day
+- Per-source breakdown table: Sessions, Turns/LLM Calls, Tokens, and AIC Credits split across VS Code, OMP, and Pi
 - Session browser with title, preview, duration, tools, and subagent usage
 - Clickable links to session log and transcript JSONL files
 - Model breakdown across Claude, GPT, Gemini families with per-model credit costs
-- Daily usage trends (stacked bar chart) + daily credits chart
+- Daily usage trends (stacked bar chart) + monthly credits calendar heatmap
 - Tool and subagent call tracking
 - Live OpenTelemetry receiver (OTLP HTTP on port 14318)
 - Auto-refresh (30s / 1m / 2m / 5m / Off) and manual refresh
@@ -47,16 +50,19 @@ Open: **Command Palette** > `Copilot Usage: Open Dashboard`
 
 ## Data Sources
 
-1. **chatSessions JSONL** at `%APPDATA%/Code/User/workspaceStorage/{hash}/chatSessions/*.jsonl`
-2. **Debug-logs** at `%APPDATA%/Code/User/workspaceStorage/{hash}/GitHub.copilot-chat/debug-logs/{session}/`
+1. **VS Code chatSessions JSONL** at `%APPDATA%/Code/User/workspaceStorage/{hash}/chatSessions/*.jsonl`
+2. **VS Code debug-logs** at `%APPDATA%/Code/User/workspaceStorage/{hash}/GitHub.copilot-chat/debug-logs/{session}/`
    - `main.jsonl` — per-turn LLM call data with actual token counts and `copilotUsageNanoAiu` (exact API billing)
    - `runSubagent-*.jsonl` — subagent/child session LLM calls (aggregated into parent session totals)
    - `title-*.jsonl` — title-generation calls
-3. **Transcripts** at `%APPDATA%/Code/User/workspaceStorage/{hash}/GitHub.copilot-chat/transcripts/`
-4. **Live OTel** (optional) — built-in OTLP HTTP receiver on port 14318
+3. **VS Code transcripts** at `%APPDATA%/Code/User/workspaceStorage/{hash}/GitHub.copilot-chat/transcripts/`
+4. **Oh My Pi (OMP) agent sessions** at `~/.omp/agent/sessions/**/*.jsonl` — scanned concurrently with mtime caching; contributes LLM calls, tokens, and AIC credits to the shared budget
+5. **Pi coding-agent sessions** at `~/.pi/agent/sessions/**/*.jsonl` — same scanning model as OMP
+6. **Live OTel** (optional) — built-in OTLP HTTP receiver on port 14318
 
 The scanner handles both legacy (`kind=1`) and current (`kind=0`) JSONL formats.
 All file I/O is fully async with concurrent reads (16-worker pool) and mtime caching.
+OMP/Pi token counts are reported as **all-time** historical; AIC credits for those sources are scoped to the current billing cycle (Jun 1+).
 
 ## Configuration
 
