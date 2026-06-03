@@ -18,7 +18,7 @@
 
 ## Features
 
-- **Unified usage across 3 sources** — VS Code Copilot Chat, [Oh My Pi](https://github.com/pvjagtap/oh-my-pi) (OMP) agent sessions, and Pi coding-agent sessions, all rolled into a single AIC budget view
+- **Unified usage across 3 sources** — VS Code Copilot Chat, Oh My Pi (OMP) agent sessions, and Pi coding-agent sessions, all rolled into a single AIC budget view
 - **AI Credits (AIC) tracking** — per-model credit costs with configurable rates (June 2026 billing model)
 - **Budget monitoring** — uncapped percentage (shows true overage e.g. `494%`), "days of runway at current pace" indicator, projected end-of-cycle usage, overage cost estimates
 - **Redesigned dashboard (v1.7.6)** — hero KPI cards, tabbed Breakdown (Model / Project / Tool / Subagent), collapsible expanders, side-by-side Trend charts with auto-generated insight captions
