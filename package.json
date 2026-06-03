@@ -2,7 +2,7 @@
   "name": "copilot-usage-dashboard",
   "displayName": "Copilot Usage Dashboard",
   "description": "Live token usage dashboard for GitHub Copilot — prompt, output, and cached tokens with full analytics.",
-  "version": "1.7.3",
+  "version": "1.7.6",
   "publisher": "pvjagtap",
   "icon": "images/icon.png",
   "license": "MIT",
@@ -51,7 +51,15 @@
         "copilotUsage.aic.plan": {
           "type": "string",
           "default": "business",
-          "enum": ["free", "pro", "pro_plus", "business", "business_promo", "enterprise", "enterprise_promo"],
+          "enum": [
+            "free",
+            "pro",
+            "pro_plus",
+            "business",
+            "business_promo",
+            "enterprise",
+            "enterprise_promo"
+          ],
           "enumDescriptions": [
             "Free tier (250 credits/month)",
             "Pro — $10/month (1,000 credits)",
@@ -87,14 +95,44 @@
           "items": {
             "type": "object",
             "properties": {
-              "model": { "type": "string", "description": "Model identifier (e.g., 'claude-opus-4.6')" },
-              "inputCreditsPerMillion": { "type": "number", "description": "Credits per 1M input tokens" },
-              "outputCreditsPerMillion": { "type": "number", "description": "Credits per 1M output tokens" },
-              "cachedInputCreditsPerMillion": { "type": "number", "description": "Credits per 1M cached input tokens (read)" },
-              "cacheWriteCreditsPerMillion": { "type": "number", "description": "Credits per 1M cache write tokens (Anthropic only, 0 for others)" },
-              "tier": { "type": "string", "enum": ["base", "premium", "custom"], "description": "Cost tier" }
+              "model": {
+                "type": "string",
+                "description": "Model identifier (e.g., 'claude-opus-4.6')"
+              },
+              "inputCreditsPerMillion": {
+                "type": "number",
+                "description": "Credits per 1M input tokens"
+              },
+              "outputCreditsPerMillion": {
+                "type": "number",
+                "description": "Credits per 1M output tokens"
+              },
+              "cachedInputCreditsPerMillion": {
+                "type": "number",
+                "description": "Credits per 1M cached input tokens (read)"
+              },
+              "cacheWriteCreditsPerMillion": {
+                "type": "number",
+                "description": "Credits per 1M cache write tokens (Anthropic only, 0 for others)"
+              },
+              "tier": {
+                "type": "string",
+                "enum": [
+                  "base",
+                  "premium",
+                  "custom"
+                ],
+                "description": "Cost tier"
+              }
             },
-            "required": ["model", "inputCreditsPerMillion", "outputCreditsPerMillion", "cachedInputCreditsPerMillion", "cacheWriteCreditsPerMillion", "tier"]
+            "required": [
+              "model",
+              "inputCreditsPerMillion",
+              "outputCreditsPerMillion",
+              "cachedInputCreditsPerMillion",
+              "cacheWriteCreditsPerMillion",
+              "tier"
+            ]
           }
         }
       }

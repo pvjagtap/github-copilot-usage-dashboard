@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.6] - 2026-06-02
+
+### Changed
+- **Dashboard UI redesign — better hierarchy & scannability**:
+  - Replaced 9-card KPI strip with **4 hero cards** featuring colored accent stripes, large headline values, and contextual delta badges (runway days, turns/session, tokens/turn).
+  - Secondary KPIs (Prompt, Output, Tool Calls, Subagents, Mirrors, Transcripts) moved into a collapsible **"More details"** expander.
+  - **Breakdown section is now tabbed** (By Model · By Project · By Tool · By Subagent) — reclaims ~60% vertical space and gives each chart full width.
+  - **Trends section** places Daily Token Usage and Average Hourly Distribution side-by-side on wide screens.
+  - **Auto-generated insight captions** under each trend chart (peak day, % of period, peak hour with timezone, ±3h concentration).
+  - **All Sessions** and **Live OpenTelemetry** sections now collapsible expanders with count badges; OTel moved above AIC for quicker diagnostic visibility.
+- **AIC budget panel** softened — calmer color thresholds (blue → green → amber → red, only red when actually past budget) and a new "~N days runway at current pace" indicator.
+- **Budget percentage now uncapped** — previously the % was capped at 100%, hiding the true severity of overage. Now displays the actual ratio (e.g. `494% (+394% over)`) in red with a tooltip showing the overage in credits.
+
+### Added
+- New CSS components: `.hero-card`, `.tabs`/`.tab-panel`, `.expander` (native `<details>`), `.insight` caption box, `.budget-bar`.
+
 ## [1.7.3] - 2026-06-02
 
 ### Fixed

@@ -197,6 +197,57 @@ td { padding: 8px; border-bottom: 1px solid var(--border); font-size: 12px; }
 .sessions-scroll::-webkit-scrollbar-track { background: var(--bg); }
 .sessions-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 .sessions-scroll::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+/* ===== Redesign: hero cards, tabs, expanders, captions ===== */
+.hero-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.hero-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; position: relative; overflow: hidden; }
+.hero-card::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--blue); border-radius: 12px 0 0 12px; }
+.hero-card.accent-orange::before { background: var(--orange); }
+.hero-card.accent-green::before { background: var(--green); }
+.hero-card.accent-purple::before { background: var(--purple); }
+.hero-card .h-label { font-size: 10px; text-transform: uppercase; color: var(--muted); letter-spacing: 0.6px; margin-bottom: 6px; font-weight: 600; }
+.hero-card .h-value { font-size: 28px; font-weight: 700; line-height: 1.1; letter-spacing: -0.5px; }
+.hero-card .h-sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.hero-card .h-delta { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 10px; margin-top: 8px; }
+.h-delta.up { background: var(--pill-green-bg); color: var(--green); border: 1px solid var(--pill-green-border); }
+.h-delta.down { background: var(--pill-blue-bg); color: var(--blue); border: 1px solid var(--pill-blue-border); }
+.h-delta.warn { background: var(--pill-orange-bg); color: var(--orange); border: 1px solid var(--pill-orange-border); }
+
+/* Section wrapper with clearer hierarchy */
+.section-block { margin-bottom: 18px; }
+.section-block > .section-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 0 2px; }
+.section-block > .section-header h2 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.6px; color: var(--fg); margin: 0; }
+.section-block > .section-header .hint { font-size: 11px; color: var(--muted); margin-left: auto; }
+
+/* Tabs */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 12px; flex-wrap: wrap; }
+.tab-btn { background: transparent; color: var(--muted); border: none; border-bottom: 2px solid transparent; padding: 8px 14px; font-size: 12px; font-weight: 500; cursor: pointer; border-radius: 4px 4px 0 0; transition: color .15s, border-color .15s, background .15s; }
+.tab-btn:hover { color: var(--fg); background: var(--link-bg); }
+.tab-btn.active { color: var(--blue); border-bottom-color: var(--blue); font-weight: 600; }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* Expander */
+.expander { background: var(--card); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 14px; overflow: hidden; }
+.expander > summary { list-style: none; cursor: pointer; padding: 12px 16px; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; display: flex; align-items: center; gap: 10px; user-select: none; }
+.expander > summary::-webkit-details-marker { display: none; }
+.expander > summary::before { content: '▸'; color: var(--muted); font-size: 10px; transition: transform .15s; }
+.expander[open] > summary::before { transform: rotate(90deg); }
+.expander > summary:hover { color: var(--fg); }
+.expander > summary .badge { margin-left: auto; font-size: 10px; padding: 1px 8px; border-radius: 10px; background: var(--link-bg); color: var(--blue); border: 1px solid var(--link-border); font-weight: 500; }
+.expander > .expander-body { padding: 0 16px 16px 16px; }
+
+/* Insight caption under charts */
+.insight { font-size: 11px; color: var(--muted); margin-top: 10px; padding: 8px 12px; background: var(--link-bg); border-left: 2px solid var(--blue); border-radius: 0 4px 4px 0; line-height: 1.5; }
+.insight strong { color: var(--fg); font-weight: 600; }
+
+/* Softer budget bar */
+.budget-bar { background: var(--border); border-radius: 6px; height: 10px; overflow: hidden; position: relative; }
+.budget-bar > .fill { height: 100%; border-radius: 6px; transition: width .35s ease; }
+
+/* Two-column row for daily + hourly */
+.trend-grid { display: grid; grid-template-columns: 1fr; gap: 14px; margin-bottom: 16px; }
+@media (min-width: 1100px) { .trend-grid { grid-template-columns: 1.4fr 1fr; } }
 </style>
 </head>
 <body>
@@ -206,20 +257,79 @@ td { padding: 8px; border-bottom: 1px solid var(--border); font-size: 12px; }
 </h1>
 <div class="subtitle" id="subtitle"></div>
 <div class="filter-bar" id="filter-bar"></div>
-<div class="stats-row" id="stats-row"></div>
-<div id="live-otel-section"></div>
+
+<!-- HERO: 4 headline KPIs -->
+<div class="hero-grid" id="hero-stats"></div>
+
+<!-- Secondary KPIs: collapsible -->
+<details class="expander" id="details-expander">
+  <summary>More details <span class="badge" id="details-badge">5 metrics</span></summary>
+  <div class="expander-body"><div class="stats-row" id="stats-row"></div></div>
+</details>
+
+<!-- OTel: diagnostic/debug — collapsed by default -->
+<details class="expander" id="otel-expander">
+  <summary>Live OpenTelemetry (diagnostic) <span class="badge" id="otel-badge">—</span></summary>
+  <div class="expander-body"><div id="live-otel-section"></div></div>
+</details>
+
+<!-- AIC: promoted to position 2 (the most important business info) -->
 <div id="aic-section"></div>
+
+<!-- Usage by Source -->
 <div id="agent-section"></div>
-<div class="charts-grid" id="charts-grid">
-  <div class="chart-card"><h3>By Model</h3><div class="chart-frame chart-frame-pie"><canvas id="modelChart"></canvas></div></div>
-  <div class="chart-card"><h3>All Projects by Tokens</h3><div class="chart-scroll"><div class="chart-tall" id="projectChartFrame"><canvas id="projectChart"></canvas></div></div></div>
-  <div class="chart-card"><h3>All Tools</h3><div class="chart-scroll"><div class="chart-tall" id="toolChartFrame"><canvas id="toolChart"></canvas></div></div></div>
-  <div id="subagent-section"></div>
+
+<!-- Trend charts side-by-side -->
+<div class="section-block">
+  <div class="section-header"><h2>Trends</h2><span class="hint">Token activity over time</span></div>
+  <div class="trend-grid">
+    <div class="chart-card">
+      <h3>Daily Token Usage</h3>
+      <div class="chart-frame chart-frame-wide"><canvas id="dailyChart"></canvas></div>
+      <div class="insight" id="dailyInsight"></div>
+    </div>
+    <div class="chart-card">
+      <div style="display:flex;align-items:center"><h3 style="flex:1" id="hourlyTitle">Average Hourly Distribution</h3><div class="tz-toggle"><button class="tz-btn active" onclick="setTz(this,'local')">Local</button><button class="tz-btn" onclick="setTz(this,'utc')">UTC</button></div></div>
+      <div class="chart-frame chart-frame-wide"><canvas id="hourlyChart"></canvas></div>
+      <div class="insight" id="hourlyInsight"></div>
+    </div>
+  </div>
 </div>
-<div id="sessions-section"></div>
+
+<!-- BREAKDOWN: tabbed view of the same question sliced 4 ways -->
+<div class="section-block">
+  <div class="section-header"><h2>Breakdown</h2><span class="hint">Where did usage go?</span></div>
+  <div class="table-card" style="margin-bottom:0">
+    <div class="tabs" id="breakdown-tabs">
+      <button class="tab-btn active" data-tab="bk-model">By Model</button>
+      <button class="tab-btn" data-tab="bk-project">By Project</button>
+      <button class="tab-btn" data-tab="bk-tool">By Tool</button>
+      <button class="tab-btn" data-tab="bk-subagent">By Subagent</button>
+    </div>
+    <div class="tab-panel active" id="bk-model">
+      <div class="chart-frame chart-frame-pie"><canvas id="modelChart"></canvas></div>
+    </div>
+    <div class="tab-panel" id="bk-project">
+      <div class="chart-scroll"><div class="chart-tall" id="projectChartFrame"><canvas id="projectChart"></canvas></div></div>
+    </div>
+    <div class="tab-panel" id="bk-tool">
+      <div class="chart-scroll"><div class="chart-tall" id="toolChartFrame"><canvas id="toolChart"></canvas></div></div>
+    </div>
+    <div class="tab-panel" id="bk-subagent">
+      <div id="subagent-section"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Model usage table -->
 <div id="model-section"></div>
-<div class="chart-card" style="margin-bottom:16px"><h3>Daily Token Usage</h3><div class="chart-frame chart-frame-wide"><canvas id="dailyChart"></canvas></div></div>
-<div class="chart-card" style="margin-bottom:16px"><div style="display:flex;align-items:center"><h3 style="flex:1" id="hourlyTitle">Average Hourly Distribution</h3><div class="tz-toggle"><button class="tz-btn active" onclick="setTz(this,'local')">Local</button><button class="tz-btn" onclick="setTz(this,'utc')">UTC</button></div></div><div class="chart-frame chart-frame-wide"><canvas id="hourlyChart"></canvas></div></div>
+
+<!-- Sessions: collapsed by default since it's long -->
+<details class="expander" id="sessions-expander">
+  <summary>All Sessions <span class="badge" id="sessions-badge">0</span></summary>
+  <div class="expander-body"><div id="sessions-section"></div></div>
+</details>
+
 <div class="note" style="margin-top:16px;text-align:center;">
   Token counts come from VS Code chatSessions files. Live OTel adds request, prompt, output, and cache-read token visibility.
 </div>
@@ -378,17 +488,56 @@ function render() {
   const aicSrcSub = (ag && (ag.ompSessions > 0 || ag.piSessions > 0))
     ? 'VS Code+OMP+Pi (all sources)'
     : aicSub;
-  document.getElementById('stats-row').innerHTML = [
-    {l:'Sessions',v:t.sessions,s:rl.toLowerCase()},
-    {l:'Turns',v:t.turns,s:rl},
-    {l:'Prompt Tokens',v:fmt(t.prompt),s:'actual API usage'},
-    {l:'Output Tokens',v:fmt(t.output),s:'generated tokens'},
-    {l:'Tool Calls',v:fmt(t.tools),s:'all tool invocations'},
-    {l:'Subagent Calls',v:t.subs,s:'runSubagent only'},
-    {l:'AI Credits',v:aicTotal,s:aicSrcSub,c:'orange'},
-    {l:'Mirrors',v:DATA.scanStats.mirroredSessions,s:DATA.scanStats.mirrorCopiesPruned+' pruned'},
-    {l:'Transcripts',v:DATA.scanStats.transcriptsFound,s:DATA.scanStats.promptPreviews+' with previews'},
-  ].map(c=>'<div class="stat-card"><div class="label">'+c.l+'</div><div class="value'+(c.c?' '+c.c:'')+'">'+c.v+'</div><div class="sub">'+c.s+'</div></div>').join('');
+
+  // === HERO KPIs (4 headline cards with deltas & accent stripes) ===
+  // Compute "runway days" — how many days of budget left at current pace
+  let runwayTxt = '';
+  if (DATA.aicSummary && DATA.aicSummary.monthlyBudget > 0 && DATA.aicSummary.dailyAverage > 0) {
+    const remaining = DATA.aicSummary.monthlyBudget - DATA.aicSummary.totalCredits;
+    const days = Math.max(0, Math.floor(remaining / DATA.aicSummary.dailyAverage));
+    runwayTxt = days + ' days runway at current pace';
+  }
+  const projPct = DATA.aicSummary && DATA.aicSummary.monthlyBudget > 0
+    ? Math.round((DATA.aicSummary.projectedTotal / DATA.aicSummary.monthlyBudget) * 100)
+    : 0;
+  const spendDelta = projPct >= 100
+    ? '<span class="h-delta warn">↑ projecting '+projPct+'% of budget</span>'
+    : projPct > 0
+    ? '<span class="h-delta up">on track · '+projPct+'% projected</span>'
+    : '';
+  const turnsPerSess = t.sessions > 0 ? (t.turns/t.sessions).toFixed(1) : '0';
+  const tokensTotal = t.prompt + t.output;
+  const tokensPerTurn = t.turns > 0 ? fmt(Math.round(tokensTotal/t.turns)) : '0';
+
+  document.getElementById('hero-stats').innerHTML = [
+    {l:'AI Credits Spent', v:aicTotal, sub: runwayTxt || aicSrcSub, accent:'orange', delta:spendDelta},
+    {l:'Sessions',         v:t.sessions.toLocaleString(), sub: rl, accent:'', delta:'<span class="h-delta up">'+turnsPerSess+' turns/session</span>'},
+    {l:'Tokens Processed', v:fmt(tokensTotal), sub:'prompt + output', accent:'purple', delta:'<span class="h-delta up">'+tokensPerTurn+' avg/turn</span>'},
+    {l:'Activity',         v:t.turns.toLocaleString()+' turns', sub: fmt(t.tools)+' tool calls · '+t.subs+' subagents', accent:'green', delta:''},
+  ].map(c=>'<div class="hero-card'+(c.accent?' accent-'+c.accent:'')+'"><div class="h-label">'+c.l+'</div><div class="h-value">'+c.v+'</div><div class="h-sub">'+c.sub+'</div>'+(c.delta||'')+'</div>').join('');
+
+  // === Secondary KPIs (collapsed by default) ===
+  const detailsCards = [
+    {l:'Prompt Tokens', v:fmt(t.prompt), s:'actual API usage'},
+    {l:'Output Tokens', v:fmt(t.output), s:'generated tokens'},
+    {l:'Tool Calls',    v:fmt(t.tools), s:'all tool invocations'},
+    {l:'Subagent Calls',v:t.subs, s:'runSubagent only'},
+    {l:'Mirrors',       v:DATA.scanStats.mirroredSessions, s:DATA.scanStats.mirrorCopiesPruned+' pruned'},
+    {l:'Transcripts',   v:DATA.scanStats.transcriptsFound, s:DATA.scanStats.promptPreviews+' with previews'},
+  ];
+  document.getElementById('stats-row').innerHTML = detailsCards.map(c=>'<div class="stat-card"><div class="label">'+c.l+'</div><div class="value">'+c.v+'</div><div class="sub">'+c.s+'</div></div>').join('');
+  const dBadge = document.getElementById('details-badge');
+  if (dBadge) dBadge.textContent = detailsCards.length + ' metrics';
+
+  // Update expander badges
+  const sBadge = document.getElementById('sessions-badge');
+  if (sBadge) sBadge.textContent = sessions.length + ' sessions';
+  const oBadge = document.getElementById('otel-badge');
+  if (oBadge) {
+    oBadge.textContent = (DATA.liveOtel && DATA.liveOtel.requests)
+      ? DATA.liveOtel.requests + ' requests'
+      : 'no data';
+  }
 
   renderOtel(DATA.liveOtel);
   renderAIC(DATA.aicSummary);
@@ -543,9 +692,17 @@ function renderAIC(aic) {
   }
 
   const pct = aic.monthlyBudget > 0 ? Math.min(100, Math.round((aic.totalCredits / aic.monthlyBudget) * 100)) : 0;
-  const barColor = pct >= 90 ? 'var(--red)' : pct >= 70 ? 'var(--orange)' : 'var(--green)';
+  // Actual % of budget (uncapped) — shown in label so user sees true overage like 494%
+  const pctActual = aic.monthlyBudget > 0 ? Math.round((aic.totalCredits / aic.monthlyBudget) * 100) : 0;
+  // Calmer thresholds: blue→green→amber→red, only red when actually past budget
+  const barColor = pctActual >= 100 ? 'var(--red)' : pctActual >= 85 ? 'var(--orange)' : pctActual >= 50 ? 'var(--green)' : 'var(--blue)';
   const projPct = aic.monthlyBudget > 0 ? Math.round((aic.projectedTotal / aic.monthlyBudget) * 100) : 0;
   const projColor = projPct >= 100 ? 'var(--red)' : projPct >= 80 ? 'var(--orange)' : 'var(--green)';
+
+  // Runway: how many days left at current pace
+  const runwayDays = aic.dailyAverage > 0
+    ? Math.max(0, Math.floor((aic.monthlyBudget - aic.totalCredits) / aic.dailyAverage))
+    : 0;
 
   // Promo info
   const promo = aic.promo || {};
@@ -554,8 +711,15 @@ function renderAIC(aic) {
   const promoTag = isPromo ? ' <span style="color:var(--green);font-size:11px;font-weight:600">⚡ PROMO (until '+promo.promoEndDate+')</span>' : '';
 
   // Budget progress bar
+  const runwayBadge = runwayDays > 0
+    ? ' · <span style="color:var(--green)">~'+runwayDays+' days runway</span>'
+    : (aic.dailyAverage > 0 ? ' · <span style="color:var(--orange)">over budget pace</span>' : '');
+  const overCredits = aic.totalCredits - aic.monthlyBudget;
+  const pctLabel = pctActual > 100
+    ? '<span style="font-weight:700;color:var(--red)" title="'+overCredits.toFixed(1)+' credits over '+aic.monthlyBudget+' budget">'+pctActual+'% <span style="font-weight:500;font-size:10px;opacity:0.85">(+'+(pctActual-100)+'% over)</span></span>'
+    : '<span style="font-weight:600;color:var(--fg)">'+pctActual+'%</span>';
   const budgetBar = aic.monthlyBudget > 0
-    ? '<div style="margin:12px 0"><div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:4px"><span>'+aic.totalCredits.toFixed(1)+' / '+aic.monthlyBudget+' credits used'+( isPromo ? ' (promo)' : '')+'</span><span>'+pct+'%</span></div><div style="background:var(--border);border-radius:4px;height:8px;overflow:hidden"><div style="width:'+pct+'%;height:100%;background:'+barColor+';border-radius:4px;transition:width 0.3s"></div></div></div>'
+    ? '<div style="margin:14px 0"><div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:6px"><span>'+aic.totalCredits.toFixed(1)+' / '+aic.monthlyBudget+' credits used'+( isPromo ? ' (promo)' : '')+runwayBadge+'</span>'+pctLabel+'</div><div class="budget-bar"><div class="fill" style="width:'+pct+'%;background:'+barColor+'"></div></div></div>'
     : '';
 
   // Stats row — removed Output Credits, Cache Savings, Remaining (always 0 without cache data from API)
@@ -605,7 +769,7 @@ function renderAIC(aic) {
     + overageHTML
     + cacheNote
     + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px">'
-    + '<div><div class="section-title" style="margin-bottom:8px">Credits by Model</div><table><thead><tr><th>Model</th><th class="num">Input</th><th class="num">Output</th><th class="num">Cached</th><th class="num">Total</th></tr></thead><tbody>'+modelRows+'</tbody></table></div>'
+    + '<div><div class="section-title" style="margin-bottom:8px">AI Credits by Model</div><table><thead><tr><th>Model</th><th class="num">Input</th><th class="num">Output</th><th class="num">Cached</th><th class="num">Total</th></tr></thead><tbody>'+modelRows+'</tbody></table></div>'
     + '<div>'+calendarHTML+'</div>'
     + '</div></div>';
 }
@@ -732,6 +896,19 @@ function renderDaily(daily) {
       y:{position:'left',stacked:true,ticks:{color:tc('blue'),callback:v=>fmt(v)},grid:{color:tc('grid')},title:{display:true,text:'Tokens',color:tc('blue')}}
     }}
   });
+  // Insight caption
+  const ins = document.getElementById('dailyInsight');
+  if (ins) {
+    if (!days.length) { ins.textContent = 'No data in the selected range.'; }
+    else {
+      const totals = days.map(d => ({day:d, total:(pMap[d]||0)+(oMap[d]||0)}));
+      const peak = totals.reduce((a,b) => b.total>a.total?b:a, totals[0]);
+      const sum = totals.reduce((s,x)=>s+x.total, 0);
+      const avg = sum/days.length;
+      const pctOfTotal = sum>0 ? Math.round((peak.total/sum)*100) : 0;
+      ins.innerHTML = 'Peak day: <strong>'+peak.day+'</strong> with <strong>'+fmt(peak.total)+'</strong> tokens ('+pctOfTotal+'% of period). Daily average: <strong>'+fmt(Math.round(avg))+'</strong> tokens across <strong>'+days.length+'</strong> days.';
+    }
+  }
 }
 
 function renderModelPie(sessions) {
@@ -844,7 +1021,12 @@ function renderSubagents(subs) {
 
 function renderHourly(turns) {
   dc('hourly');
-  if (!turns.length) { document.getElementById('hourlyTitle').textContent = 'Average Hourly Distribution'; return; }
+  if (!turns.length) {
+    document.getElementById('hourlyTitle').textContent = 'Average Hourly Distribution';
+    const ins0 = document.getElementById('hourlyInsight');
+    if (ins0) ins0.textContent = 'No turn data in the selected range.';
+    return;
+  }
   // Compute hourly buckets
   const tzOff = selectedTz === 'local' ? new Date().getTimezoneOffset() : 0;
   const tzName = selectedTz === 'local' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'UTC';
@@ -897,10 +1079,34 @@ function renderHourly(turns) {
       y1:{position:'right',ticks:{color:tc('purple'),callback:v=>fmt(v)},grid:{drawOnChartArea:false},title:{display:true,text:'Avg Output Tokens',color:tc('purple')}}
     }}
   });
+  // Insight caption — peak hour + concentration
+  const ins = document.getElementById('hourlyInsight');
+  if (ins) {
+    let peakH = 0, peakV = 0, totalT = 0;
+    avgTurns.forEach((v,h) => { totalT += v; if (v > peakV) { peakV = v; peakH = h; } });
+    const peakLabel = String(peakH).padStart(2,'0')+':00';
+    // Concentration: % of activity in 6h window around peak
+    let windowSum = 0;
+    for (let i = -3; i <= 3; i++) { windowSum += avgTurns[(peakH+i+24)%24]; }
+    const concPct = totalT > 0 ? Math.round((windowSum/totalT)*100) : 0;
+    ins.innerHTML = 'Peak activity at <strong>'+peakLabel+'</strong> ('+tzName+') averaging <strong>'+peakV+'</strong> turns/hour. <strong>'+concPct+'%</strong> of activity falls within ±3h of peak.';
+  }
 }
 
 buildFilterBar();
 queueRender();
+
+// Wire up Breakdown tabs (once)
+document.querySelectorAll('#breakdown-tabs .tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#breakdown-tabs .tab-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const targetId = btn.dataset.tab;
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === targetId));
+    // Resize charts when made visible (Chart.js needs a nudge)
+    requestAnimationFrame(resizeCharts);
+  });
+});
 
 window.addEventListener('resize', () => { requestAnimationFrame(resizeCharts); });
 document.addEventListener('visibilitychange', () => {

@@ -11,14 +11,14 @@
 <p align="center">
   <img src="https://img.shields.io/badge/VS%20Code-1.85%2B-blue?logo=visualstudiocode" alt="VS Code 1.85+">
   <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License">
-  <img src="https://img.shields.io/badge/Version-1.5.8-purple" alt="Version">
+  <img src="https://img.shields.io/badge/Version-1.7.2-purple" alt="Version">
 </p>
 
 ---
 
 ## Features
 
-- **AI Credits (AIC) tracking** — per-model credit costs with configurable rates (June 2025 billing model)
+- **AI Credits (AIC) tracking** — per-model credit costs with configurable rates (June 2026 billing model)
 - **Budget monitoring** — monthly budget progress bar, projected usage, overage cost estimates
 - Token counts (prompt, output, cached) per session, model, project, and day
 - Session browser with title, preview, duration, tools, and subagent usage
