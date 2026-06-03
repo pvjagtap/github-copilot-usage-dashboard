@@ -18,7 +18,7 @@
 
 ## Features
 
-- **Unified usage across 3 sources** — VS Code Copilot Chat, Oh My Pi (OMP) agent sessions, and Pi coding-agent sessions, all rolled into a single AIC budget view
+- **Unified usage across 3 sources** — VS Code Copilot Chat, [Oh My Pi](https://github.com/can1357/oh-my-pi) (OMP) agent sessions, and [Pi](https://github.com/earendil-works/pi) coding-agent sessions, all rolled into a single AIC budget view
 - **AI Credits (AIC) tracking** — per-model credit costs with configurable rates (June 2026 billing model)
 - **Budget monitoring** — uncapped percentage (shows true overage e.g. `494%`), "days of runway at current pace" indicator, projected end-of-cycle usage, overage cost estimates
 - **Redesigned dashboard (v1.7.6)** — hero KPI cards, tabbed Breakdown (Model / Project / Tool / Subagent), collapsible expanders, side-by-side Trend charts with auto-generated insight captions
@@ -56,8 +56,8 @@ Open: **Command Palette** > `Copilot Usage: Open Dashboard`
    - `runSubagent-*.jsonl` — subagent/child session LLM calls (aggregated into parent session totals)
    - `title-*.jsonl` — title-generation calls
 3. **VS Code transcripts** at `%APPDATA%/Code/User/workspaceStorage/{hash}/GitHub.copilot-chat/transcripts/`
-4. **Oh My Pi (OMP) agent sessions** at `~/.omp/agent/sessions/**/*.jsonl` — scanned concurrently with mtime caching; contributes LLM calls, tokens, and AIC credits to the shared budget
-5. **Pi coding-agent sessions** at `~/.pi/agent/sessions/**/*.jsonl` — same scanning model as OMP
+4. **[Oh My Pi](https://github.com/can1357/oh-my-pi) (OMP) agent sessions** at `~/.omp/agent/sessions/**/*.jsonl` — scanned concurrently with mtime caching; contributes LLM calls, tokens, and AIC credits to the shared budget
+5. **[Pi](https://github.com/earendil-works/pi) coding-agent sessions** at `~/.pi/agent/sessions/**/*.jsonl` — same scanning model as OMP
 6. **Live OTel** (optional) — built-in VSCode OTLP HTTP receiver on port 14318
 
 The scanner handles both legacy (`kind=1`) and current (`kind=0`) JSONL formats.
