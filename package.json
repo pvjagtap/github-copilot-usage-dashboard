@@ -2,7 +2,7 @@
   "name": "copilot-usage-dashboard",
   "displayName": "Copilot Usage Dashboard",
   "description": "Live token usage dashboard for GitHub Copilot — prompt, output, and cached tokens with full analytics.",
-  "version": "1.7.7",
+  "version": "1.9.3",
   "publisher": "pvjagtap",
   "icon": "images/icon.png",
   "license": "MIT",
@@ -43,100 +43,201 @@
       {
         "command": "copilotUsage.refresh",
         "title": "Copilot Usage: Refresh Stats"
+      },
+      {
+        "command": "copilotUsage.dailyLimit.snooze",
+        "title": "Copilot Usage: Snooze Daily Limit Alert"
+      },
+      {
+        "command": "copilotUsage.dailyLimit.resume",
+        "title": "Copilot Usage: Resume Copilot (Override Daily Limit)"
+      },
+      {
+        "command": "copilotUsage.dailyLimit.reset",
+        "title": "Copilot Usage: Reset Today's Daily-Limit Counter"
+      },
+      {
+        "command": "copilotUsage.dailyLimit.showShield",
+        "title": "Copilot Usage: Show Daily Limit Shield"
+      },
+      {
+        "command": "copilotUsage.dailyLimit.installHooks",
+        "title": "Copilot Usage: Install Agent Hooks (CLI / Custom Agents / Cloud)"
+      },
+      {
+        "command": "copilotUsage.dailyLimit.uninstallHooks",
+        "title": "Copilot Usage: Uninstall Agent Hooks"
       }
     ],
-    "configuration": {
-      "title": "Copilot Usage — AI Credits (AIC)",
-      "properties": {
-        "copilotUsage.aic.plan": {
-          "type": "string",
-          "default": "business",
-          "enum": [
-            "free",
-            "pro",
-            "pro_plus",
-            "business",
-            "business_promo",
-            "enterprise",
-            "enterprise_promo"
-          ],
-          "enumDescriptions": [
-            "Free tier (250 credits/month)",
-            "Pro — $10/month (1,000 credits)",
-            "Pro+ — $39/month (7,500 credits)",
-            "Business — $19/user/month (1,900 credits/user, pooled)",
-            "Business Promo — June–Sept 2026 (3,000 credits/user, pooled)",
-            "Enterprise — $39/user/month (3,900 credits/user, pooled)",
-            "Enterprise Promo — June–Sept 2026 (7,000 credits/user, pooled)"
-          ],
-          "description": "Your GitHub Copilot plan. Determines included monthly AI credits per user."
-        },
-        "copilotUsage.aic.billingCycleStartDay": {
-          "type": "number",
-          "default": 1,
-          "minimum": 1,
-          "maximum": 28,
-          "description": "Day of month when your billing cycle starts (1-28)."
-        },
-        "copilotUsage.aic.monthlyCreditsIncluded": {
-          "type": "number",
-          "default": 1900,
-          "description": "Override monthly included credits per user (set 0 for unlimited). Defaults based on plan selection."
-        },
-        "copilotUsage.aic.overageCostPerCredit": {
-          "type": "number",
-          "default": 0.01,
-          "description": "Cost in USD per AI credit overage. Official rate: 1 credit = $0.01 USD."
-        },
-        "copilotUsage.aic.customModelCosts": {
-          "type": "array",
-          "default": [],
-          "description": "Custom per-model credit rates (per 1M tokens). Overrides defaults for specified models.",
-          "items": {
-            "type": "object",
-            "properties": {
-              "model": {
-                "type": "string",
-                "description": "Model identifier (e.g., 'claude-opus-4.6')"
+    "configuration": [
+      {
+        "title": "Copilot Usage — AI Credits (AIC)",
+        "properties": {
+          "copilotUsage.aic.plan": {
+            "type": "string",
+            "default": "business",
+            "enum": [
+              "free",
+              "pro",
+              "pro_plus",
+              "business",
+              "business_promo",
+              "enterprise",
+              "enterprise_promo"
+            ],
+            "enumDescriptions": [
+              "Free tier (250 credits/month)",
+              "Pro — $10/month (1,000 credits)",
+              "Pro+ — $39/month (7,500 credits)",
+              "Business — $19/user/month (1,900 credits/user, pooled)",
+              "Business Promo — June–Sept 2026 (3,000 credits/user, pooled)",
+              "Enterprise — $39/user/month (3,900 credits/user, pooled)",
+              "Enterprise Promo — June–Sept 2026 (7,000 credits/user, pooled)"
+            ],
+            "description": "Your GitHub Copilot plan. Determines included monthly AI credits per user."
+          },
+          "copilotUsage.aic.billingCycleStartDay": {
+            "type": "number",
+            "default": 1,
+            "minimum": 1,
+            "maximum": 28,
+            "description": "Day of month when your billing cycle starts (1-28)."
+          },
+          "copilotUsage.aic.monthlyCreditsIncluded": {
+            "type": "number",
+            "default": 1900,
+            "description": "Override monthly included credits per user (set 0 for unlimited). Defaults based on plan selection."
+          },
+          "copilotUsage.aic.overageCostPerCredit": {
+            "type": "number",
+            "default": 0.01,
+            "description": "Cost in USD per AI credit overage. Official rate: 1 credit = $0.01 USD."
+          },
+          "copilotUsage.aic.customModelCosts": {
+            "type": "array",
+            "default": [],
+            "description": "Custom per-model credit rates (per 1M tokens). Overrides defaults for specified models.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "model": {
+                  "type": "string",
+                  "description": "Model identifier (e.g., 'claude-opus-4.6')"
+                },
+                "inputCreditsPerMillion": {
+                  "type": "number",
+                  "description": "Credits per 1M input tokens"
+                },
+                "outputCreditsPerMillion": {
+                  "type": "number",
+                  "description": "Credits per 1M output tokens"
+                },
+                "cachedInputCreditsPerMillion": {
+                  "type": "number",
+                  "description": "Credits per 1M cached input tokens (read)"
+                },
+                "cacheWriteCreditsPerMillion": {
+                  "type": "number",
+                  "description": "Credits per 1M cache write tokens (Anthropic only, 0 for others)"
+                },
+                "tier": {
+                  "type": "string",
+                  "enum": [
+                    "base",
+                    "premium",
+                    "custom"
+                  ],
+                  "description": "Cost tier"
+                }
               },
-              "inputCreditsPerMillion": {
-                "type": "number",
-                "description": "Credits per 1M input tokens"
-              },
-              "outputCreditsPerMillion": {
-                "type": "number",
-                "description": "Credits per 1M output tokens"
-              },
-              "cachedInputCreditsPerMillion": {
-                "type": "number",
-                "description": "Credits per 1M cached input tokens (read)"
-              },
-              "cacheWriteCreditsPerMillion": {
-                "type": "number",
-                "description": "Credits per 1M cache write tokens (Anthropic only, 0 for others)"
-              },
-              "tier": {
-                "type": "string",
-                "enum": [
-                  "base",
-                  "premium",
-                  "custom"
-                ],
-                "description": "Cost tier"
-              }
-            },
-            "required": [
-              "model",
-              "inputCreditsPerMillion",
-              "outputCreditsPerMillion",
-              "cachedInputCreditsPerMillion",
-              "cacheWriteCreditsPerMillion",
-              "tier"
-            ]
+              "required": [
+                "model",
+                "inputCreditsPerMillion",
+                "outputCreditsPerMillion",
+                "cachedInputCreditsPerMillion",
+                "cacheWriteCreditsPerMillion",
+                "tier"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "Copilot Usage — Daily Limit Guard",
+        "properties": {
+          "copilotUsage.dailyLimit.enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enable the daily AI Credits limit guard with visual indicator + optional Copilot pause."
+          },
+          "copilotUsage.dailyLimit.credits": {
+            "type": "number",
+            "default": 100,
+            "minimum": 1,
+            "description": "Maximum AI Credits (AIC) you allow yourself to spend per day. 1 AIC ≈ $0.01."
+          },
+          "copilotUsage.dailyLimit.dollars": {
+            "type": "number",
+            "default": 0,
+            "minimum": 0,
+            "description": "Optional: set a daily dollar limit instead of credits. If > 0, this overrides 'credits' (converted via copilotUsage.aic.overageCostPerCredit, default $0.01/credit). Set to 0 to use the credits-based limit."
+          },
+          "copilotUsage.dailyLimit.warnAtPercent": {
+            "type": "number",
+            "default": 75,
+            "minimum": 10,
+            "maximum": 99,
+            "description": "Percent of daily limit at which the first warning appears (status bar turns amber)."
+          },
+          "copilotUsage.dailyLimit.braceAtPercent": {
+            "type": "number",
+            "default": 90,
+            "minimum": 50,
+            "maximum": 99,
+            "description": "Percent of daily limit at which the floating corner card appears (orange)."
+          },
+          "copilotUsage.dailyLimit.resetHour": {
+            "type": "number",
+            "default": 0,
+            "minimum": 0,
+            "maximum": 23,
+            "description": "Local hour at which the daily counter resets (0 = midnight)."
+          },
+          "copilotUsage.dailyLimit.enforcement": {
+            "type": "string",
+            "default": "pause",
+            "enum": [
+              "soft",
+              "pause",
+              "strict"
+            ],
+            "enumDescriptions": [
+              "Soft — Show overlay + nag modal only. Copilot keeps working.",
+              "Pause — Turn off Copilot completions and show modal block for chat (no reload).",
+              "Strict — Disable Copilot + Copilot Chat extensions (requires window reload)."
+            ],
+            "description": "What to do when the daily limit is reached."
+          },
+          "copilotUsage.dailyLimit.snoozeMinutes": {
+            "type": "number",
+            "default": 10,
+            "minimum": 1,
+            "maximum": 240,
+            "description": "How long the 'Snooze' button silences the limit overlay."
+          },
+          "copilotUsage.dailyLimit.playSound": {
+            "type": "boolean",
+            "default": false,
+            "description": "Play a soft chime when the daily limit is first reached."
+          },
+          "copilotUsage.dailyLimit.installAgentHooks": {
+            "type": "boolean",
+            "default": true,
+            "description": "Install global GitHub Copilot lifecycle hooks (~/.copilot/hooks) so the daily limit also denies tool calls in Copilot CLI, local custom agents, and the cloud agent. Does not affect plain Copilot Chat Ask mode (use 'strict' enforcement for that). Disable to remove hooks."
           }
         }
       }
-    }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",

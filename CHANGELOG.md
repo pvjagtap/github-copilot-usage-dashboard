@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-06-03
+
+### Added
+
+- **GitHub Copilot agent hooks integration** — the daily limit now denies tool calls in Copilot CLI, local custom agents, and the cloud agent (when opted in). On activation, the extension installs a `PreToolUse` hook at `~/.copilot/hooks/copilot-usage-limit.json` plus PowerShell/bash scripts at `~/.copilot-usage/`. A live state file is rewritten on every snapshot so snooze/resume/end-override take effect on the very next tool call.
+- New setting `copilotUsage.dailyLimit.installAgentHooks` (default `true`) — flip off to remove hooks immediately.
+- New commands `Copilot Usage: Install Agent Hooks` and `Copilot Usage: Uninstall Agent Hooks`.
+
+### Notes
+
+- Plain Copilot Chat (Ask mode) in the sidebar is **not** covered by hooks — no hook surface exists for it. Use `strict` enforcement (extension disable + reload) if you need to lock it down too.
+- Hooks are fail-OPEN by design: a broken script will never block Copilot. Only a successful read of the state file with `blocked == true` produces a deny.
+
 ## [1.7.7] - 2026-06-02
 
 ### Documentation

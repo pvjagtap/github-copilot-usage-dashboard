@@ -6,6 +6,10 @@ import { scanWorkspaceStorage, ScanResult } from "./scanner";
 import { scanAgentSessions, AgentScanResult } from "./agentScanner";
 import { buildDashboardData, DashboardData } from "./dashboardData";
 import { AICConfig, DEFAULT_AIC_CONFIG, createCalculatorFromConfig } from "./aicCredits";
+import { DailyLimitTracker, getDailyLimitConfig } from "./dailyLimitTracker";
+import { LimitOverlay } from "./limitOverlay";
+import { Enforcement } from "./enforcement";
+import { HookManager } from "./hookManager";
 
 const OTEL_PORT = 14318;
 const DEFAULT_REFRESH_MS = 120_000;
@@ -25,13 +29,23 @@ let cachedDashData: DashboardData | undefined;
 let lastOtelRequests = 0;
 let otelDebounceTimer: ReturnType<typeof setTimeout> | undefined;
 
+/** Daily-limit subsystem */
+let limitTracker: DailyLimitTracker | undefined;
+let limitOverlay: LimitOverlay | undefined;
+let enforcement: Enforcement | undefined;
+let hookManager: HookManager | undefined;
+let limitDayKey: string | undefined;
+
 function getAICConfig(): AICConfig {
   const cfg = vscode.workspace.getConfiguration("copilotUsage.aic");
   return {
     plan: cfg.get<string>("plan") ?? DEFAULT_AIC_CONFIG.plan,
-    billingCycleStartDay: cfg.get<number>("billingCycleStartDay") ?? DEFAULT_AIC_CONFIG.billingCycleStartDay,
-    monthlyCreditsIncluded: cfg.get<number>("monthlyCreditsIncluded") ?? DEFAULT_AIC_CONFIG.monthlyCreditsIncluded,
-    overageCostPerCredit: cfg.get<number>("overageCostPerCredit") ?? DEFAULT_AIC_CONFIG.overageCostPerCredit,
+    billingCycleStartDay:
+      cfg.get<number>("billingCycleStartDay") ?? DEFAULT_AIC_CONFIG.billingCycleStartDay,
+    monthlyCreditsIncluded:
+      cfg.get<number>("monthlyCreditsIncluded") ?? DEFAULT_AIC_CONFIG.monthlyCreditsIncluded,
+    overageCostPerCredit:
+      cfg.get<number>("overageCostPerCredit") ?? DEFAULT_AIC_CONFIG.overageCostPerCredit,
     customModelCosts: cfg.get("customModelCosts") ?? DEFAULT_AIC_CONFIG.customModelCosts,
   };
 }
@@ -47,12 +61,30 @@ function buildData(): DashboardData {
   lastOtelRequests = otelReqs;
 
   const t0 = Date.now();
-  const scan = lastScan ?? { sessions: [], turns: [], toolCalls: [], subagents: [], stats: { sourceFiles: 0, canonicalSessions: 0, mirroredSessions: 0, mirrorCopiesPruned: 0, turnsStored: 0, toolCallsStored: 0, promptPreviews: 0, transcriptsFound: 0, debugLogSessions: 0 } };
+  const scan = lastScan ?? {
+    sessions: [],
+    turns: [],
+    toolCalls: [],
+    subagents: [],
+    stats: {
+      sourceFiles: 0,
+      canonicalSessions: 0,
+      mirroredSessions: 0,
+      mirrorCopiesPruned: 0,
+      turnsStored: 0,
+      toolCallsStored: 0,
+      promptPreviews: 0,
+      transcriptsFound: 0,
+      debugLogSessions: 0,
+    },
+  };
   const aicConfig = getAICConfig();
   cachedDashData = buildDashboardData(scan, otelStats, aicConfig, lastAgentScan);
   const elapsed = Date.now() - t0;
   if (elapsed > 200) {
-    output.appendLine(`buildData took ${elapsed}ms (${scan.stats.turnsStored} turns, ${scan.stats.canonicalSessions} sessions)`);
+    output.appendLine(
+      `buildData took ${elapsed}ms (${scan.stats.turnsStored} turns, ${scan.stats.canonicalSessions} sessions)`
+    );
   }
   return cachedDashData;
 }
@@ -73,10 +105,10 @@ async function runScan(): Promise<void> {
     const elapsed = Date.now() - t0;
     output.appendLine(
       `Scan: ${lastScan.stats.canonicalSessions} sessions, ${lastScan.stats.turnsStored} turns, ` +
-      `${lastScan.stats.toolCallsStored} tools (${elapsed}ms)` +
-      (lastAgentScan
-        ? ` | Agent: OMP=${lastAgentScan.ompSessionCount} Pi=${lastAgentScan.piSessionCount} (${lastAgentScan.scanMs}ms)`
-        : " | Agent: scan failed"),
+        `${lastScan.stats.toolCallsStored} tools (${elapsed}ms)` +
+        (lastAgentScan
+          ? ` | Agent: OMP=${lastAgentScan.ompSessionCount} Pi=${lastAgentScan.piSessionCount} (${lastAgentScan.scanMs}ms)`
+          : " | Agent: scan failed")
     );
   } catch (err) {
     output.appendLine(`Scan error: ${err}`);
@@ -123,9 +155,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       // outfile overrides exporterType to "file", which prevents HTTP export
       const outfileConflict = currentOutfile.length > 0;
 
-      const needsUpdate = currentEnabled !== true
-        || currentEndpoint !== expectedEndpoint
-        || outfileConflict;
+      const needsUpdate =
+        currentEnabled !== true || currentEndpoint !== expectedEndpoint || outfileConflict;
 
       if (needsUpdate) {
         await config.update("enabled", true, vscode.ConfigurationTarget.Global);
@@ -135,17 +166,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         // The extension now relays /v1/logs to the same JSONL for hooks.
         if (outfileConflict) {
           await config.update("outfile", undefined, vscode.ConfigurationTarget.Global);
-          output.appendLine(`Removed outfile setting (was: ${currentOutfile}) — relay handles JSONL output`);
+          output.appendLine(
+            `Removed outfile setting (was: ${currentOutfile}) — relay handles JSONL output`
+          );
         }
         output.appendLine(`Updated OTel settings: endpoint=${expectedEndpoint}`);
-        void vscode.window.showInformationMessage(
-          `Copilot Usage: OTel receiver on port ${port}. Reload VS Code once for Copilot to start exporting.`,
-          "Reload Window",
-        ).then(choice => {
-          if (choice === "Reload Window") {
-            void vscode.commands.executeCommand("workbench.action.reloadWindow");
-          }
-        });
+        void vscode.window
+          .showInformationMessage(
+            `Copilot Usage: OTel receiver on port ${port}. Reload VS Code once for Copilot to start exporting.`,
+            "Reload Window"
+          )
+          .then(choice => {
+            if (choice === "Reload Window") {
+              void vscode.commands.executeCommand("workbench.action.reloadWindow");
+            }
+          });
       } else {
         output.appendLine(`OTel settings already correct: endpoint=${expectedEndpoint}`);
       }
@@ -154,9 +189,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const captureContent = config.get<boolean>("captureContent");
       const dbSpan = config.get<boolean>("dbSpanExporter.enabled");
       const exporterType = config.get<string>("exporterType");
-      output.appendLine(`OTel config summary: enabled=true exporterType=${exporterType} endpoint=${expectedEndpoint} captureContent=${captureContent} dbSpanExporter=${dbSpan}`);
-      output.appendLine(`Tip: If no spans appear below, open "Help → Toggle Developer Tools → Console" and search for "[OTel]"`);
-      output.appendLine(`Tip: After changing settings, run "Developer: Reload Window" for Copilot Chat to pick them up`);
+      output.appendLine(
+        `OTel config summary: enabled=true exporterType=${exporterType} endpoint=${expectedEndpoint} captureContent=${captureContent} dbSpanExporter=${dbSpan}`
+      );
+      output.appendLine(
+        `Tip: If no spans appear below, open "Help → Toggle Developer Tools → Console" and search for "[OTel]"`
+      );
+      output.appendLine(
+        `Tip: After changing settings, run "Developer: Reload Window" for Copilot Chat to pick them up`
+      );
     } catch (err) {
       output.appendLine(`Could not update settings: ${err}`);
     }
@@ -166,12 +207,123 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   statusBar = new StatusBarProvider("copilotUsage.openDashboard");
   context.subscriptions.push({ dispose: () => statusBar?.dispose() });
 
+  // ── Daily limit subsystem ──────────────────────────────────
+  limitTracker = new DailyLimitTracker(context);
+  limitOverlay = new LimitOverlay(context.extensionUri);
+  enforcement = new Enforcement(context, m => output.appendLine(m));
+  hookManager = new HookManager(m => output.appendLine(m));
+
+  // Install global Copilot agent hooks (denies tool calls in CLI / custom agents
+  // / cloud agent when daily limit is reached). Opt-out via setting.
+  if (getDailyLimitConfig().installAgentHooks !== false) {
+    void hookManager.install();
+  }
+
+  // React to stage changes — log only. Enforcement decisions happen on every
+  // snapshot (below) so snooze/resume/expiry all take effect immediately.
+  limitTracker.onStageChange((snap, prev) => {
+    output.appendLine(
+      `Daily-limit stage: ${prev} → ${snap.stage} (${snap.used}/${snap.limit} = ${snap.percent}%)`
+    );
+  });
+
+  // Daily-limit commands
+  context.subscriptions.push(
+    vscode.commands.registerCommand("copilotUsage.dailyLimit.snooze", async () => {
+      const mins = getDailyLimitConfig().snoozeMinutes;
+      await limitTracker?.snooze(mins);
+      output.appendLine(`Daily limit snoozed for ${mins} min.`);
+      void vscode.window.showInformationMessage(`Copilot Usage: snoozed for ${mins} minutes.`);
+      updateStatusBar();
+    }),
+    vscode.commands.registerCommand("copilotUsage.dailyLimit.resume", async () => {
+      const aicCfg = getAICConfig();
+      const snap =
+        limitTracker?.last() ??
+        limitTracker?.snapshot(
+          lastScan,
+          receiver?.getStats() ?? null,
+          createCalculatorFromConfig(aicCfg),
+          aicCfg.overageCostPerCredit ?? 0.01
+        );
+      if (snap) {
+        await limitTracker?.markResumed(snap.dayKey);
+      }
+      await enforcement?.release();
+      output.appendLine(`Daily limit overridden by user for today (${snap?.dayKey}).`);
+      void vscode.window.showInformationMessage(
+        "Copilot Usage: resumed for today. Counter will still grow."
+      );
+      updateStatusBar();
+    }),
+    vscode.commands.registerCommand("copilotUsage.dailyLimit.reset", async () => {
+      await limitTracker?.clearSnooze();
+      await limitTracker?.clearResume();
+      await enforcement?.release();
+      output.appendLine(
+        "Daily-limit snooze + resume cleared — enforcement re-engaged on next snapshot."
+      );
+      void vscode.window.showInformationMessage(
+        "Copilot Usage: override ended. Block will re-engage if you're still over today's limit."
+      );
+      updateStatusBar();
+    }),
+    vscode.commands.registerCommand("copilotUsage.dailyLimit.showShield", () => {
+      const aicCfg = getAICConfig();
+      const calc = createCalculatorFromConfig(aicCfg);
+      const snap = limitTracker!.snapshot(
+        lastScan,
+        receiver?.getStats() ?? null,
+        calc,
+        aicCfg.overageCostPerCredit ?? 0.01
+      );
+      limitOverlay?.forceShow(snap);
+    }),
+    vscode.commands.registerCommand("copilotUsage.dailyLimit.installHooks", async () => {
+      await hookManager?.install();
+      const paths = hookManager?.paths();
+      void vscode.window.showInformationMessage(
+        `Copilot Usage: agent hooks installed at ${paths?.hookFile ?? "~/.copilot/hooks"}.`
+      );
+      // Push current snapshot to the new state file.
+      updateStatusBar();
+    }),
+    vscode.commands.registerCommand("copilotUsage.dailyLimit.uninstallHooks", async () => {
+      await hookManager?.uninstall();
+      void vscode.window.showInformationMessage(
+        "Copilot Usage: agent hooks removed. CLI / custom agents / cloud agent will no longer be blocked."
+      );
+    })
+  );
+
+  // Re-evaluate when daily-limit settings change.
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration(e => {
+      if (e.affectsConfiguration("copilotUsage.dailyLimit.installAgentHooks")) {
+        const want = getDailyLimitConfig().installAgentHooks !== false;
+        if (want && !hookManager?.isInstalled()) {
+          void hookManager?.install();
+        } else if (!want && hookManager?.isInstalled()) {
+          void hookManager?.uninstall();
+        }
+      }
+      if (
+        e.affectsConfiguration("copilotUsage.dailyLimit") ||
+        e.affectsConfiguration("copilotUsage.aic")
+      ) {
+        updateStatusBar();
+      }
+    })
+  );
+
   // Initial status bar with scan data
   updateStatusBar();
 
   // Update status bar and dashboard on new OTel data (debounced to avoid thrashing)
   receiver.onStats(() => {
-    if (otelDebounceTimer) { return; } // Already scheduled
+    if (otelDebounceTimer) {
+      return;
+    } // Already scheduled
     otelDebounceTimer = setTimeout(() => {
       otelDebounceTimer = undefined;
       updateStatusBar();
@@ -188,7 +340,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await runScan();
       updateStatusBar();
       DashboardPanel.show(context.extensionUri, buildData());
-    }),
+    })
   );
 
   // Handle file open requests from dashboard webview
@@ -208,13 +360,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void runScan().then(() => {
       updateStatusBar();
       DashboardPanel.updateIfVisible(buildData());
-      output.appendLine('Manual refresh triggered from dashboard');
+      output.appendLine("Manual refresh triggered from dashboard");
     });
   };
 
   // Handle refresh rate changes from dashboard webview
   DashboardPanel.onRefreshRateChange = (intervalMs: number) => {
-    if (scanTimer) { clearInterval(scanTimer); scanTimer = undefined; }
+    if (scanTimer) {
+      clearInterval(scanTimer);
+      scanTimer = undefined;
+    }
     if (intervalMs > 0) {
       scanTimer = setInterval(() => {
         void runScan().then(() => {
@@ -235,11 +390,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       DashboardPanel.updateIfVisible(buildData());
     });
   }, DEFAULT_REFRESH_MS);
-  context.subscriptions.push({ dispose: () => { if (scanTimer) { clearInterval(scanTimer); } } });
+  context.subscriptions.push({
+    dispose: () => {
+      if (scanTimer) {
+        clearInterval(scanTimer);
+      }
+    },
+  });
 }
 
 function updateStatusBar(): void {
-  if (!statusBar) { return; }
+  if (!statusBar) {
+    return;
+  }
   const scan = lastScan?.stats ?? null;
   const otel = receiver?.getStats() ?? null;
 
@@ -259,11 +422,20 @@ function updateStatusBar(): void {
     let otelModel = "unknown";
     let maxTokens = 0;
     for (const m of otel.byModel.values()) {
-      const usage = calculator.calculateCredits(m.model, m.prompt, m.completion, m.cached, m.cacheWrite);
+      const usage = calculator.calculateCredits(
+        m.model,
+        m.prompt,
+        m.completion,
+        m.cached,
+        m.cacheWrite
+      );
       otelAIC += usage.totalCredits;
       otelPrompt += m.prompt;
       otelOutput += m.completion;
-      if (m.prompt + m.completion > maxTokens) { maxTokens = m.prompt + m.completion; otelModel = m.model; }
+      if (m.prompt + m.completion > maxTokens) {
+        maxTokens = m.prompt + m.completion;
+        otelModel = m.model;
+      }
     }
     currentSessionAIC = Math.round(otelAIC * 100) / 100;
     currentSession = {
@@ -280,8 +452,8 @@ function updateStatusBar(): void {
   } else if (lastScan && lastScan.turns.length > 0) {
     // No live OTel — use scanner turns that arrived AFTER this extension activated.
     // This scopes "current" to this VS Code instance even when reading shared storage.
-    const instanceTurns = lastScan.turns.filter(t =>
-      t.timestamp && t.timestamp >= activationTime && t.timestamp.slice(0, 10) >= AIC_START
+    const instanceTurns = lastScan.turns.filter(
+      t => t.timestamp && t.timestamp >= activationTime && t.timestamp.slice(0, 10) >= AIC_START
     );
 
     if (instanceTurns.length > 0) {
@@ -305,7 +477,12 @@ function updateStatusBar(): void {
         instancePrompt += t.debugPromptTokens || t.promptTokens;
         instanceOutput += t.debugOutputTokens || t.outputTokens;
         const m = t.modelFamily || "unknown";
-        modelTokens.set(m, (modelTokens.get(m) ?? 0) + (t.debugPromptTokens || t.promptTokens) + (t.debugOutputTokens || t.outputTokens));
+        modelTokens.set(
+          m,
+          (modelTokens.get(m) ?? 0) +
+            (t.debugPromptTokens || t.promptTokens) +
+            (t.debugOutputTokens || t.outputTokens)
+        );
       }
 
       const topModel = [...modelTokens.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "unknown";
@@ -328,7 +505,13 @@ function updateStatusBar(): void {
   let lastRequestAIC = 0;
   if (otel && otel.lastRequest) {
     const lr = otel.lastRequest;
-    const reqCredits = calculator.calculateCredits(lr.modelName, lr.promptTokens, lr.completionTokens, lr.cachedTokens, lr.cacheWriteTokens);
+    const reqCredits = calculator.calculateCredits(
+      lr.modelName,
+      lr.promptTokens,
+      lr.completionTokens,
+      lr.cachedTokens,
+      lr.cacheWriteTokens
+    );
     lastRequestAIC = Math.round(reqCredits.totalCredits * 100) / 100;
   }
 
@@ -339,12 +522,95 @@ function updateStatusBar(): void {
     totalSessions: scan?.canonicalSessions ?? 0,
     currentSessionAIC,
     lastRequestAIC,
+    dailyLimit: computeAndPushDailyLimit(calculator),
   });
 }
 
+function computeAndPushDailyLimit(calculator: ReturnType<typeof createCalculatorFromConfig>) {
+  if (!limitTracker) {
+    return undefined;
+  }
+  const cfg = getDailyLimitConfig();
+  const aicCfg = getAICConfig();
+  const dpc = aicCfg.overageCostPerCredit ?? 0.01;
+  const snap = limitTracker.snapshot(lastScan, receiver?.getStats() ?? null, calculator, dpc);
+
+  // When the guard is disabled, still propagate the (disabled) snapshot so the
+  // hook state file unblocks agents and any enforcement is released. Skip the
+  // overlay nag/enforce logic only.
+  if (!cfg.enabled) {
+    void hookManager?.updateFromSnapshot(snap);
+    void enforcement?.release();
+    // Keep shield in sync if it happens to be open (e.g. user just toggled off
+    // from inside the webview — they want the toggle to still respond).
+    limitOverlay?.render(snap);
+    return {
+      stage: snap.stage,
+      used: snap.used,
+      limit: snap.limit,
+      percent: snap.percent,
+      usedDollars: snap.usedDollars,
+      limitDollars: snap.limitDollars,
+      dollarMode: snap.dollarMode,
+      snoozed: snap.snoozed,
+      resumed: snap.resumed,
+    };
+  }
+
+  // Auto-clear resume/snooze when the day rolls over.
+  if (limitDayKey && limitDayKey !== snap.dayKey) {
+    void (async () => {
+      await limitTracker?.clearSnooze();
+      await limitTracker?.clearResume();
+      await enforcement?.release();
+      output?.appendLine(
+        `Day rolled ${limitDayKey} → ${snap.dayKey} — snooze/resume cleared, pause released.`
+      );
+    })();
+  }
+  limitDayKey = snap.dayKey;
+
+  // Fire stage-change listeners (overlay + enforcement).
+  limitTracker.push(snap);
+
+  // Update hook state file so CLI / custom agents / cloud agent see the new
+  // blocked/unblocked state on their next tool call.
+  void hookManager?.updateFromSnapshot(snap);
+
+  // Continuous enforcement decision — runs on every snapshot, not just stage change.
+  // This is what makes Snooze/Resume/expiry transitions actually take effect.
+  const shouldBlock = snap.stage === "limit" && !snap.snoozed && !snap.resumed;
+  void (async () => {
+    if (shouldBlock) {
+      await enforcement?.enforce(snap.enforcement);
+    } else {
+      await enforcement?.release();
+    }
+  })();
+
+  // Always re-render overlay so it can re-nag on every new request while at limit.
+  limitOverlay?.render(snap);
+
+  return {
+    stage: snap.stage,
+    used: snap.used,
+    limit: snap.limit,
+    percent: snap.percent,
+    usedDollars: snap.usedDollars,
+    limitDollars: snap.limitDollars,
+    dollarMode: snap.dollarMode,
+    snoozed: snap.snoozed,
+    resumed: snap.resumed,
+  };
+}
+
 export function deactivate(): void {
-  if (scanTimer) { clearInterval(scanTimer); }
-  if (otelDebounceTimer) { clearTimeout(otelDebounceTimer); }
+  if (scanTimer) {
+    clearInterval(scanTimer);
+  }
+  if (otelDebounceTimer) {
+    clearTimeout(otelDebounceTimer);
+  }
   receiver?.stop();
   statusBar?.dispose();
 }
