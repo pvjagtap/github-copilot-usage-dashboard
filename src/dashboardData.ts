@@ -366,13 +366,43 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
       const usage = calculator.calculateCredits(m.model, m.prompt, m.completion, m.cached, m.cacheWrite);
       sessionAIC += usage.totalCredits;
     }
-    // Compute last request AIC
+    // Compute last request AIC from OTel data
     let lastRequestAIC = 0;
     if (liveStats.lastRequest) {
       const lr = liveStats.lastRequest;
       const reqCredits = calculator.calculateCredits(lr.modelName, lr.promptTokens, lr.completionTokens, lr.cachedTokens, lr.cacheWriteTokens);
       lastRequestAIC = reqCredits.totalCredits;
     }
+
+    // ── Debug-log overlay (exact API-billed AIC) ──
+    // OTel attributes for cache_read / cache_creation tokens are inconsistent
+    // across models — notably missing for some Anthropic Opus traces, which
+    // causes the calculator to produce under- or over-estimates. Debug logs
+    // capture `copilotUsageNanoAiu` directly from the API response, which is
+    // the exact billed value. When available, prefer it.
+    const todayDate = new Date().toISOString().slice(0, 10);
+    const debugTurnsToday = scan.turns.filter(
+      t => t.timestamp && t.timestamp.slice(0, 10) === todayDate && t.debugAicCredits > 0
+    );
+    if (debugTurnsToday.length > 0) {
+      // sessionAIC: take the larger of (OTel-derived, debug-log today sum) to
+      // avoid regressing when OTel has newer in-flight requests not yet flushed.
+      const debugSessionAIC = debugTurnsToday.reduce((s, t) => s + t.debugAicCredits, 0);
+      sessionAIC = Math.max(sessionAIC, debugSessionAIC);
+
+      // lastRequestAIC: use the most recent debug-log turn's exact AIC, but
+      // only if it is at least as new as the OTel lastRequest (so OTel still
+      // wins for the truly latest in-flight request not yet in debug logs).
+      const mostRecentDebug = debugTurnsToday.reduce(
+        (best, t) => (!best || t.timestamp > best.timestamp ? t : best),
+        undefined as Turn | undefined
+      );
+      const otelLastTs = liveStats.lastRequest?.timestamp ?? "";
+      if (mostRecentDebug && (mostRecentDebug.timestamp >= otelLastTs || lastRequestAIC === 0)) {
+        lastRequestAIC = mostRecentDebug.debugAicCredits;
+      }
+    }
+
     liveOtel = {
       requests: liveStats.requests,
       prompt: liveStats.prompt,

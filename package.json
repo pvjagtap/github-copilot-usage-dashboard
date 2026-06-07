@@ -2,7 +2,7 @@
   "name": "copilot-usage-dashboard",
   "displayName": "Copilot Usage Dashboard",
   "description": "Live token usage dashboard for GitHub Copilot — prompt, output, and cached tokens with full analytics.",
-  "version": "1.9.3",
+  "version": "1.9.6",
   "publisher": "pvjagtap",
   "icon": "images/icon.png",
   "license": "MIT",
@@ -67,6 +67,10 @@
       {
         "command": "copilotUsage.dailyLimit.uninstallHooks",
         "title": "Copilot Usage: Uninstall Agent Hooks"
+      },
+      {
+        "command": "copilotUsage.aic.detectPlan",
+        "title": "Copilot Usage: Detect My Copilot Plan"
       }
     ],
     "configuration": [
@@ -95,6 +99,11 @@
               "Enterprise Promo — June–Sept 2026 (7,000 credits/user, pooled)"
             ],
             "description": "Your GitHub Copilot plan. Determines included monthly AI credits per user."
+          },
+          "copilotUsage.aic.autoDetectPlan": {
+            "type": "boolean",
+            "default": true,
+            "description": "On first activation, silently detect your GitHub Copilot plan via your existing GitHub session (no extra sign-in required) and write it to copilotUsage.aic.plan. Falls back to a one-time picker if detection fails. Set false to keep the manually configured plan only."
           },
           "copilotUsage.aic.billingCycleStartDay": {
             "type": "number",

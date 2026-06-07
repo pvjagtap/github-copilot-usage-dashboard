@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.6] - 2026-06-07
+
+### Fixed
+
+- **Picker now always offers the one-click "Detect via GitHub" button.** v1.9.5 hid the button behind a `getAccounts('github')` check — but VS Code's auth API is scoped per extension, so `getAccounts` returns `[]` until our extension has been granted access at least once. Net effect: the button was effectively never shown on first run. The button is now unconditional; clicking it triggers VS Code's standard "Allow Copilot Usage Dashboard to use GitHub?" consent dialog, then queries the SKU and writes the plan automatically.
+
+## [1.9.5] - 2026-06-07
+
+### Fixed
+
+- **Silent plan detection now actually succeeds for most users.** v1.9.4 only asked VS Code for a GitHub session scoped to `['read:user']` — VS Code caches one session per unique scope tuple, so Copilot's existing session (typically `['repo','workflow','read:user']`) didn't match and detection silently fell through to the picker. The detector now tries multiple known scope variants in order and uses whichever one returns a cached session, with zero prompts.
+- When no silent session matches but a GitHub account exists, the picker fallback now offers a **"Detect via GitHub"** button that triggers VS Code's one-click consent dialog ("Allow Copilot Usage Dashboard to use GitHub?") — a single click instead of a manual plan pick.
+
+## [1.9.4] - 2026-06-07
+
+### Fixed
+
+- **Plan no longer hard-defaults to Business.** Pro / Pro+ / Free / Enterprise users were silently shown the Business budget (1,900 credits) because `copilotUsage.aic.plan` shipped a `business` default and was never auto-detected. The dashboard now reads the user's actual SKU via their existing VS Code GitHub session — no extra sign-in — by calling GitHub's `/copilot_internal/v2/token` (the same call the official Copilot extension makes) and maps the returned SKU to the correct plan key. If detection fails or returns an unknown SKU, a one-time picker is shown so the user can choose explicitly. A plan the user has set manually is never overwritten.
+
+### Added
+
+- New setting `copilotUsage.aic.autoDetectPlan` (default `true`) — set to `false` to disable silent detection and rely on the manual `copilotUsage.aic.plan` value only.
+- New command **Copilot Usage: Detect My Copilot Plan** — re-runs detection on demand (useful after upgrading from Pro to Pro+ or moving to a Business seat).
+
 ## [1.9.0] - 2026-06-03
 
 ### Added

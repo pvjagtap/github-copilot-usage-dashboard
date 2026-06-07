@@ -8,12 +8,6 @@
   <strong>A self-contained VS Code extension that gives you full visibility into your GitHub Copilot token usage.</strong>
 </p>
 
-<p align="center">
-  <img src="https://img.shields.io/badge/VS%20Code-1.85%2B-blue?logo=visualstudiocode" alt="VS Code 1.85+">
-  <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License">
-  <img src="https://img.shields.io/badge/Version-1.9.3-purple" alt="Version">
-</p>
-
 ---
 
 ## Features
@@ -131,18 +125,18 @@ Anthropic models also incur cache write costs: `(cache_write_tokens / 1M) × cac
 
 Cap your **daily** spend independently of the monthly AIC budget. Configure in **Settings** → search `copilotUsage.dailyLimit` (lives in its own settings group: **Copilot Usage — Daily Limit Guard**):
 
-| Setting                                       | Default | Description                                                                                |
-| --------------------------------------------- | ------- | ------------------------------------------------------------------------------------------ |
-| `copilotUsage.dailyLimit.enabled`             | `true`  | Master switch. When off, agents are unblocked instantly.                                   |
-| `copilotUsage.dailyLimit.credits`             | `100`   | Daily limit in **AI credits** (1 credit = $0.01).                                          |
-| `copilotUsage.dailyLimit.dollars`             | `0`     | Daily limit in **USD**. When > 0, overrides `credits`. Easier to reason about.             |
-| `copilotUsage.dailyLimit.warnPct`             | `75`    | Show amber warning at this % of the limit.                                                 |
-| `copilotUsage.dailyLimit.bracePct`            | `90`    | Show orange brace overlay at this % (mascot starts panicking).                             |
-| `copilotUsage.dailyLimit.mode`                | `pause` | Enforcement: `soft` (overlay only) / `pause` (kills inline completions) / `strict` (disables Copilot + Chat — needs reload). |
-| `copilotUsage.dailyLimit.snoozeMinutes`       | `15`    | How long the **Snooze** button postpones enforcement.                                      |
-| `copilotUsage.dailyLimit.resetHour`           | `0`     | Hour of local day when the counter rolls over (0–23).                                      |
-| `copilotUsage.dailyLimit.installAgentHooks`   | `true`  | Install Copilot lifecycle hooks at `~/.copilot/hooks/` so CLI / agents stop too.           |
-| `copilotUsage.dailyLimit.includeOmpPi`        | `true`  | Count OMP + Pi agent credits toward the daily total.                                       |
+| Setting                                     | Default | Description                                                                                                                  |
+| ------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `copilotUsage.dailyLimit.enabled`           | `true`  | Master switch. When off, agents are unblocked instantly.                                                                     |
+| `copilotUsage.dailyLimit.credits`           | `100`   | Daily limit in **AI credits** (1 credit = $0.01).                                                                            |
+| `copilotUsage.dailyLimit.dollars`           | `0`     | Daily limit in **USD**. When > 0, overrides `credits`. Easier to reason about.                                               |
+| `copilotUsage.dailyLimit.warnPct`           | `75`    | Show amber warning at this % of the limit.                                                                                   |
+| `copilotUsage.dailyLimit.bracePct`          | `90`    | Show orange brace overlay at this % (mascot starts panicking).                                                               |
+| `copilotUsage.dailyLimit.mode`              | `pause` | Enforcement: `soft` (overlay only) / `pause` (kills inline completions) / `strict` (disables Copilot + Chat — needs reload). |
+| `copilotUsage.dailyLimit.snoozeMinutes`     | `15`    | How long the **Snooze** button postpones enforcement.                                                                        |
+| `copilotUsage.dailyLimit.resetHour`         | `0`     | Hour of local day when the counter rolls over (0–23).                                                                        |
+| `copilotUsage.dailyLimit.installAgentHooks` | `true`  | Install Copilot lifecycle hooks at `~/.copilot/hooks/` so CLI / agents stop too.                                             |
+| `copilotUsage.dailyLimit.includeOmpPi`      | `true`  | Count OMP + Pi agent credits toward the daily total.                                                                         |
 
 #### How the agent hook works
 
@@ -154,13 +148,13 @@ When `installAgentHooks: true`, the extension writes:
 
 Coverage:
 
-| Surface                       | Blocked? | How                                       |
-| ----------------------------- | -------- | ----------------------------------------- |
-| Copilot CLI (`gh copilot`)    | ✅       | PreToolUse hook                           |
-| Local custom agents           | ✅       | PreToolUse hook                           |
-| Copilot cloud agent           | ✅       | PreToolUse hook (commit `.github/hooks/`) |
-| VS Code Chat sidebar          | ❌       | No hook surface — use `mode: strict`      |
-| VS Code inline completions    | ⚠️       | Use `mode: pause` or `strict`             |
+| Surface                    | Blocked? | How                                       |
+| -------------------------- | -------- | ----------------------------------------- |
+| Copilot CLI (`gh copilot`) | ✅       | PreToolUse hook                           |
+| Local custom agents        | ✅       | PreToolUse hook                           |
+| Copilot cloud agent        | ✅       | PreToolUse hook (commit `.github/hooks/`) |
+| VS Code Chat sidebar       | ❌       | No hook surface — use `mode: strict`      |
+| VS Code inline completions | ⚠️       | Use `mode: pause` or `strict`             |
 
 The check script is **fail-OPEN** — if it errors, Copilot continues working. Only a successful `blocked == true` read produces a deny.
 
@@ -171,16 +165,16 @@ You can install/uninstall hooks manually via Command Palette:
 
 ## Commands
 
-| Command                                              | Description                                            |
-| ---------------------------------------------------- | ------------------------------------------------------ |
-| `Copilot Usage: Open Dashboard`                      | Open or focus the dashboard                            |
-| `Copilot Usage: Refresh Stats`                       | Rescan chatSession files and refresh                   |
-| `Copilot Usage: Show Daily Limit Shield`             | Open the shield webview with mascot + inline controls  |
-| `Copilot Usage: Snooze Daily Limit`                  | Postpone enforcement by `snoozeMinutes`                |
-| `Copilot Usage: Resume Today (override limit)`       | Override the limit for the rest of the local day       |
-| `Copilot Usage: Reset Today's Daily-Limit Counter`   | Zero today's spend counter                             |
-| `Copilot Usage: Install Agent Hooks`                 | Write Copilot lifecycle hooks to `~/.copilot/hooks/`   |
-| `Copilot Usage: Uninstall Agent Hooks`               | Remove the Copilot lifecycle hooks                     |
+| Command                                            | Description                                           |
+| -------------------------------------------------- | ----------------------------------------------------- |
+| `Copilot Usage: Open Dashboard`                    | Open or focus the dashboard                           |
+| `Copilot Usage: Refresh Stats`                     | Rescan chatSession files and refresh                  |
+| `Copilot Usage: Show Daily Limit Shield`           | Open the shield webview with mascot + inline controls |
+| `Copilot Usage: Snooze Daily Limit`                | Postpone enforcement by `snoozeMinutes`               |
+| `Copilot Usage: Resume Today (override limit)`     | Override the limit for the rest of the local day      |
+| `Copilot Usage: Reset Today's Daily-Limit Counter` | Zero today's spend counter                            |
+| `Copilot Usage: Install Agent Hooks`               | Write Copilot lifecycle hooks to `~/.copilot/hooks/`  |
+| `Copilot Usage: Uninstall Agent Hooks`             | Remove the Copilot lifecycle hooks                    |
 
 ## Requirements
 

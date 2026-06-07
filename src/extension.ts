@@ -10,6 +10,7 @@ import { DailyLimitTracker, getDailyLimitConfig } from "./dailyLimitTracker";
 import { LimitOverlay } from "./limitOverlay";
 import { Enforcement } from "./enforcement";
 import { HookManager } from "./hookManager";
+import { detectAndApplyPlan, resetPlanDetection } from "./planDetector";
 
 const OTEL_PORT = 14318;
 const DEFAULT_REFRESH_MS = 120_000;
@@ -121,6 +122,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // Record activation time — used to scope "current" stats to this VS Code instance
   activationTime = new Date().toISOString();
+
+  // Auto-detect the user's Copilot plan via their existing GitHub session
+  // (silent — no extra sign-in). Falls back to a one-time picker if the
+  // session is missing or the SKU is unrecognised. Fire-and-forget so we
+  // never block activation on a network call.
+  void detectAndApplyPlan(context, m => output.appendLine(m));
 
   // Initial scan of chatSession files
   await runScan();
@@ -293,6 +300,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void vscode.window.showInformationMessage(
         "Copilot Usage: agent hooks removed. CLI / custom agents / cloud agent will no longer be blocked."
       );
+    }),
+    vscode.commands.registerCommand("copilotUsage.aic.detectPlan", async () => {
+      await resetPlanDetection(context);
+      await detectAndApplyPlan(context, m => output.appendLine(m));
     })
   );
 
@@ -319,15 +330,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Initial status bar with scan data
   updateStatusBar();
 
-  // Update status bar and dashboard on new OTel data (debounced to avoid thrashing)
+  // Update status bar and dashboard on new OTel data (debounced to avoid thrashing).
+  // Also re-scan workspace storage so the latest debug-log `copilotUsageNanoAiu`
+  // (exact API-billed AIC) is reflected in the AIC overlays. The scanner uses
+  // mtime caching so re-scans are cheap when only one debug-log file changed.
   receiver.onStats(() => {
     if (otelDebounceTimer) {
       return;
     } // Already scheduled
     otelDebounceTimer = setTimeout(() => {
       otelDebounceTimer = undefined;
-      updateStatusBar();
-      DashboardPanel.updateIfVisible(buildData());
+      void runScan().then(() => {
+        updateStatusBar();
+        DashboardPanel.updateIfVisible(buildData());
+      });
     }, OTEL_DEBOUNCE_MS);
   });
 
@@ -437,6 +453,24 @@ function updateStatusBar(): void {
         otelModel = m.model;
       }
     }
+
+    // Overlay debug-log AIC (exact API-billed copilotUsageNanoAiu). OTel cache
+    // attributes are missing for some Anthropic Opus traces, which makes the
+    // calculator under- or over-report. Debug logs always carry the exact
+    // billed value, so prefer it when it is at least as large.
+    if (lastScan && lastScan.turns.length > 0) {
+      const todayKey = new Date().toISOString().slice(0, 10);
+      const debugAicToday = lastScan.turns.reduce((sum, t) => {
+        if (t.timestamp && t.timestamp.slice(0, 10) === todayKey && t.debugAicCredits > 0) {
+          return sum + t.debugAicCredits;
+        }
+        return sum;
+      }, 0);
+      if (debugAicToday > otelAIC) {
+        otelAIC = debugAicToday;
+      }
+    }
+
     currentSessionAIC = Math.round(otelAIC * 100) / 100;
     currentSession = {
       sessionId: "otel",
@@ -501,8 +535,12 @@ function updateStatusBar(): void {
     }
   }
 
-  // Compute per-request AIC from last OTel request
+  // Compute per-request AIC from last OTel request, then overlay the most
+  // recent debug-log turn's exact AIC if it is at least as new. Debug-log
+  // values come from `copilotUsageNanoAiu` (the API-billed credit count) and
+  // are authoritative — OTel cache attributes are unreliable for some models.
   let lastRequestAIC = 0;
+  let lastRequestSourceTs = "";
   if (otel && otel.lastRequest) {
     const lr = otel.lastRequest;
     const reqCredits = calculator.calculateCredits(
@@ -512,8 +550,24 @@ function updateStatusBar(): void {
       lr.cachedTokens,
       lr.cacheWriteTokens
     );
-    lastRequestAIC = Math.round(reqCredits.totalCredits * 100) / 100;
+    lastRequestAIC = reqCredits.totalCredits;
+    lastRequestSourceTs = lr.timestamp || "";
   }
+  if (lastScan && lastScan.turns.length > 0) {
+    let mostRecentDebug: { ts: string; aic: number } | undefined;
+    for (const t of lastScan.turns) {
+      if (!t.timestamp || t.debugAicCredits <= 0) {
+        continue;
+      }
+      if (!mostRecentDebug || t.timestamp > mostRecentDebug.ts) {
+        mostRecentDebug = { ts: t.timestamp, aic: t.debugAicCredits };
+      }
+    }
+    if (mostRecentDebug && (mostRecentDebug.ts >= lastRequestSourceTs || lastRequestAIC === 0)) {
+      lastRequestAIC = mostRecentDebug.aic;
+    }
+  }
+  lastRequestAIC = Math.round(lastRequestAIC * 100) / 100;
 
   statusBar.updateStatus({
     otel,
