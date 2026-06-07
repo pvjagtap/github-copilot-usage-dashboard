@@ -12,3 +12,7 @@ copilot_all_tools.jsonl
 **/*.ts
 **/*.map
 **/*.vsix
+.release-notes-*.md
+AIC-PROCESSING-PIPELINE.md
+aic-formula.html
+implementation-notes.html
