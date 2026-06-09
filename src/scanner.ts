@@ -108,9 +108,7 @@ export interface ScanStats {
 function str(obj: unknown, ...keys: string[]): string {
   let cur: unknown = obj;
   for (const k of keys) {
-    if (cur === null || cur === undefined || typeof cur !== "object") {
-      return "";
-    }
+    if (cur === null || cur === undefined || typeof cur !== "object") { return ""; }
     cur = (cur as Record<string, unknown>)[k];
   }
   return typeof cur === "string" ? cur : "";
@@ -120,9 +118,7 @@ function str(obj: unknown, ...keys: string[]): string {
 function num(obj: unknown, ...keys: string[]): number {
   let cur: unknown = obj;
   for (const k of keys) {
-    if (cur === null || cur === undefined || typeof cur !== "object") {
-      return 0;
-    }
+    if (cur === null || cur === undefined || typeof cur !== "object") { return 0; }
     cur = (cur as Record<string, unknown>)[k];
   }
   return typeof cur === "number" ? cur : 0;
@@ -132,9 +128,7 @@ function num(obj: unknown, ...keys: string[]): number {
 function get(obj: unknown, ...keys: string[]): unknown {
   let cur: unknown = obj;
   for (const k of keys) {
-    if (cur === null || cur === undefined || typeof cur !== "object") {
-      return undefined;
-    }
+    if (cur === null || cur === undefined || typeof cur !== "object") { return undefined; }
     cur = (cur as Record<string, unknown>)[k];
   }
   return cur;
@@ -153,50 +147,31 @@ function isArr(v: unknown): v is unknown[] {
 // ─── Helpers ──────────────────────────────────────────────────
 
 function epochMsToIso(ms: number): string {
-  if (!ms || ms <= 0) {
-    return "";
-  }
+  if (!ms || ms <= 0) { return ""; }
   return new Date(ms).toISOString();
 }
 
 function extractWorkspaceName(cacheKey: string | undefined, wsHash: string): string {
-  if (!cacheKey) {
-    return `workspace-${wsHash.slice(0, 8)}`;
-  }
+  if (!cacheKey) { return `workspace-${wsHash.slice(0, 8)}`; }
   try {
     let p = cacheKey;
-    if (p.startsWith("file:///")) {
-      p = p.slice(8);
-    } else if (p.startsWith("file://")) {
-      p = p.slice(7);
-    }
+    if (p.startsWith("file:///")) { p = p.slice(8); }
+    else if (p.startsWith("file://")) { p = p.slice(7); }
     p = decodeURIComponent(p);
-    if (/^\/[A-Z]:/i.test(p)) {
-      p = p.slice(1);
-    }
+    if (/^\/[A-Z]:/i.test(p)) { p = p.slice(1); }
     const parts = p.replace(/\\/g, "/").split("/").filter(Boolean);
-    if (parts.length >= 2) {
-      return parts.slice(-2).join("/");
-    }
-    if (parts.length === 1) {
-      return parts[0];
-    }
-  } catch {
-    /* ignore */
-  }
+    if (parts.length >= 2) { return parts.slice(-2).join("/"); }
+    if (parts.length === 1) { return parts[0]; }
+  } catch { /* ignore */ }
   return `workspace-${wsHash.slice(0, 8)}`;
 }
 
 function extractRequestText(requests: unknown[]): string {
   const texts: string[] = [];
   for (const req of requests) {
-    if (!isObj(req)) {
-      continue;
-    }
+    if (!isObj(req)) { continue; }
     const msg = req.message;
-    if (!isObj(msg)) {
-      continue;
-    }
+    if (!isObj(msg)) { continue; }
     if (typeof msg.text === "string" && msg.text.trim()) {
       texts.push(msg.text.trim());
       continue;
@@ -207,9 +182,7 @@ function extractRequestText(requests: unknown[]): string {
           texts.push(part.trim());
         } else if (isObj(part)) {
           const t = part.text ?? part.value ?? part.markdown ?? part.content;
-          if (typeof t === "string" && t.trim()) {
-            texts.push(t.trim());
-          }
+          if (typeof t === "string" && t.trim()) { texts.push(t.trim()); }
         }
       }
     }
@@ -224,7 +197,7 @@ function extractRequestText(requests: unknown[]): string {
 async function mapConcurrent<T, R>(
   items: T[],
   concurrency: number,
-  fn: (item: T) => Promise<R>
+  fn: (item: T) => Promise<R>,
 ): Promise<R[]> {
   const results = new Array<R>(items.length);
   let idx = 0;
@@ -236,7 +209,10 @@ async function mapConcurrent<T, R>(
     }
   }
 
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => worker());
+  const workers = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    () => worker(),
+  );
   await Promise.all(workers);
   return results;
 }
@@ -250,16 +226,9 @@ interface SessionBundle {
   subagents: Subagent[];
 }
 
-function parseSessionContent(
-  content: string,
-  filePath: string,
-  wsHash: string,
-  projectName: string
-): SessionBundle | null {
+function parseSessionContent(content: string, filePath: string, wsHash: string, projectName: string): SessionBundle | null {
   const lines = content.split("\n").filter(l => l.trim());
-  if (lines.length === 0) {
-    return null;
-  }
+  if (lines.length === 0) { return null; }
 
   let sessionId = "";
   let sessionTitle = "";
@@ -279,14 +248,8 @@ function parseSessionContent(
 
   for (const line of lines) {
     let entry: unknown;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (!isObj(entry)) {
-      continue;
-    }
+    try { entry = JSON.parse(line); } catch { continue; }
+    if (!isObj(entry)) { continue; }
 
     const kind = entry.kind;
     const k = entry.k;
@@ -295,24 +258,16 @@ function parseSessionContent(
     // kind=0: session metadata
     if (kind === 0 && isObj(v)) {
       sessionId = typeof v.sessionId === "string" ? v.sessionId : "";
-      if (typeof v.creationDate === "number") {
-        firstTimestamp = epochMsToIso(v.creationDate);
-      }
-      if (typeof v.customTitle === "string") {
-        sessionTitle = v.customTitle;
-      }
+      if (typeof v.creationDate === "number") { firstTimestamp = epochMsToIso(v.creationDate); }
+      if (typeof v.customTitle === "string") { sessionTitle = v.customTitle; }
       location = typeof v.initialLocation === "string" ? v.initialLocation : "";
 
       const sel = get(v, "inputState", "selectedModel");
       if (isObj(sel)) {
         const meta = sel.metadata;
         if (isObj(meta)) {
-          modelName =
-            typeof meta.name === "string"
-              ? meta.name
-              : typeof sel.identifier === "string"
-                ? sel.identifier
-                : "unknown";
+          modelName = typeof meta.name === "string" ? meta.name
+            : typeof sel.identifier === "string" ? sel.identifier : "unknown";
           modelFamily = typeof meta.family === "string" ? meta.family : "unknown";
           modelMultiplier = typeof meta.multiplierNumeric === "number" ? meta.multiplierNumeric : 0;
           accountLabel = str(meta, "auth", "accountLabel");
@@ -326,29 +281,18 @@ function parseSessionContent(
       if (isArr(vRequests)) {
         for (let ri = 0; ri < vRequests.length; ri++) {
           const req = vRequests[ri];
-          if (!isObj(req)) {
-            continue;
-          }
+          if (!isObj(req)) { continue; }
           const meta = get(req, "result", "metadata");
           if (isObj(meta)) {
             const metaTs = num(meta, "requestTimestamp");
             const reqTs = num(req as Record<string, unknown>, "timestamp");
-            const timestamp = metaTs
-              ? epochMsToIso(metaTs)
-              : reqTs
-                ? epochMsToIso(reqTs)
-                : firstTimestamp;
+            const timestamp = metaTs ? epochMsToIso(metaTs)
+              : reqTs ? epochMsToIso(reqTs) : firstTimestamp;
             const wName = extractWorkspaceName(
-              typeof meta.cacheKey === "string" ? meta.cacheKey : undefined,
-              wsHash
-            );
-            if (typeof meta.agentId === "string") {
-              agentId = meta.agentId;
-            }
+              typeof meta.cacheKey === "string" ? meta.cacheKey : undefined, wsHash);
+            if (typeof meta.agentId === "string") { agentId = meta.agentId; }
             const reqAgent = get(req, "agent", "id");
-            if (typeof reqAgent === "string") {
-              agentId = reqAgent;
-            }
+            if (typeof reqAgent === "string") { agentId = reqAgent; }
 
             turns.push({
               sessionId,
@@ -370,26 +314,14 @@ function parseSessionContent(
             let callIndex = 0;
             if (isArr(meta.toolCallRounds)) {
               for (const round of meta.toolCallRounds) {
-                if (!isObj(round)) {
-                  continue;
-                }
+                if (!isObj(round)) { continue; }
                 const roundCalls = round.toolCalls;
-                if (!isArr(roundCalls)) {
-                  continue;
-                }
+                if (!isArr(roundCalls)) { continue; }
                 for (const tc of roundCalls) {
-                  if (!isObj(tc)) {
-                    continue;
-                  }
+                  if (!isObj(tc)) { continue; }
                   const toolName = typeof tc.name === "string" ? tc.name : "unknown";
                   const isSub = toolName === "runSubagent";
-                  toolCalls.push({
-                    sessionId,
-                    turnIndex: ri,
-                    callIndex,
-                    toolName,
-                    isSubagent: isSub,
-                  });
+                  toolCalls.push({ sessionId, turnIndex: ri, callIndex, toolName, isSubagent: isSub });
                   if (isSub) {
                     let aName = "unknown";
                     let desc = "";
@@ -400,16 +332,8 @@ function parseSessionContent(
                         aName = typeof args.agentName === "string" ? args.agentName : "unknown";
                         desc = typeof args.description === "string" ? args.description : "";
                       }
-                    } catch {
-                      /* ignore */
-                    }
-                    subagents.push({
-                      sessionId,
-                      turnIndex: ri,
-                      callIndex,
-                      agentName: aName,
-                      description: desc,
-                    });
+                    } catch { /* ignore */ }
+                    subagents.push({ sessionId, turnIndex: ri, callIndex, agentName: aName, description: desc });
                   }
                   callIndex++;
                 }
@@ -420,9 +344,7 @@ function parseSessionContent(
             const reqTs = num(req as Record<string, unknown>, "timestamp");
             const ts = reqTs ? epochMsToIso(reqTs) : firstTimestamp;
             const reqAgent = get(req, "agent", "id");
-            if (typeof reqAgent === "string") {
-              agentId = reqAgent;
-            }
+            if (typeof reqAgent === "string") { agentId = reqAgent; }
             const hasResponse = "response" in (req as Record<string, unknown>);
             if (ts || hasResponse) {
               turns.push({
@@ -447,15 +369,9 @@ function parseSessionContent(
           if (ri === 0 && !promptPreview) {
             const msg = (req as Record<string, unknown>).message;
             if (isObj(msg)) {
-              const text =
-                typeof msg.text === "string"
-                  ? msg.text.trim()
-                  : isArr(msg.parts)
-                    ? msg.parts
-                        .filter((p): p is string => typeof p === "string")
-                        .join(" ")
-                        .trim()
-                    : "";
+              const text = typeof msg.text === "string" ? msg.text.trim()
+                : isArr(msg.parts) ? msg.parts.filter((p): p is string => typeof p === "string").join(" ").trim()
+                : "";
               if (text) {
                 promptPreview = text.length > 180 ? text.slice(0, 177) + "..." : text;
                 promptCount = vRequests.length;
@@ -474,29 +390,16 @@ function parseSessionContent(
     }
 
     // kind=1, k=["requests", N, "result"]: turn result
-    if (
-      kind === 1 &&
-      isArr(k) &&
-      k.length === 3 &&
-      k[0] === "requests" &&
-      k[2] === "result" &&
-      isObj(v)
-    ) {
+    if (kind === 1 && isArr(k) && k.length === 3 && k[0] === "requests" && k[2] === "result" && isObj(v)) {
       const turnIndex = typeof k[1] === "number" ? k[1] : parseInt(String(k[1]), 10);
       const meta = v.metadata;
-      if (!isObj(meta)) {
-        continue;
-      }
+      if (!isObj(meta)) { continue; }
 
       const metaTs = num(meta, "requestTimestamp");
       const timestamp = metaTs ? epochMsToIso(metaTs) : firstTimestamp;
       const wName = extractWorkspaceName(
-        typeof meta.cacheKey === "string" ? meta.cacheKey : undefined,
-        wsHash
-      );
-      if (typeof meta.agentId === "string") {
-        agentId = meta.agentId;
-      }
+        typeof meta.cacheKey === "string" ? meta.cacheKey : undefined, wsHash);
+      if (typeof meta.agentId === "string") { agentId = meta.agentId; }
 
       turns.push({
         sessionId,
@@ -518,17 +421,11 @@ function parseSessionContent(
       let callIndex = 0;
       if (isArr(meta.toolCallRounds)) {
         for (const round of meta.toolCallRounds) {
-          if (!isObj(round)) {
-            continue;
-          }
+          if (!isObj(round)) { continue; }
           const roundCalls = round.toolCalls;
-          if (!isArr(roundCalls)) {
-            continue;
-          }
+          if (!isArr(roundCalls)) { continue; }
           for (const tc of roundCalls) {
-            if (!isObj(tc)) {
-              continue;
-            }
+            if (!isObj(tc)) { continue; }
             const toolName = typeof tc.name === "string" ? tc.name : "unknown";
             const isSub = toolName === "runSubagent";
             toolCalls.push({ sessionId, turnIndex, callIndex, toolName, isSubagent: isSub });
@@ -543,9 +440,7 @@ function parseSessionContent(
                   agentName = typeof args.agentName === "string" ? args.agentName : "unknown";
                   desc = typeof args.description === "string" ? args.description : "";
                 }
-              } catch {
-                /* ignore */
-              }
+              } catch { /* ignore */ }
               subagents.push({ sessionId, turnIndex, callIndex, agentName, description: desc });
             }
             callIndex++;
@@ -566,9 +461,7 @@ function parseSessionContent(
     }
   }
 
-  if (!sessionId) {
-    return null;
-  }
+  if (!sessionId) { return null; }
 
   // Calculate session totals from turns
   const totalPrompt = turns.reduce((s, t) => s + t.promptTokens, 0);
@@ -576,10 +469,9 @@ function parseSessionContent(
   const totalToolRounds = turns.reduce((s, t) => s + t.toolCallRounds, 0);
   const totalToolResults = turns.reduce((s, t) => s + t.toolCallResults, 0);
   const subagentCallCount = subagents.length;
-  const lastTimestamp =
-    turns.length > 0
-      ? turns.reduce((best, t) => (t.timestamp > best ? t.timestamp : best), "")
-      : firstTimestamp;
+  const lastTimestamp = turns.length > 0
+    ? turns.reduce((best, t) => t.timestamp > best ? t.timestamp : best, "")
+    : firstTimestamp;
 
   return {
     session: {
@@ -640,9 +532,7 @@ function compareBundles(a: SessionBundle, b: SessionBundle): number {
   const sa = canonicalScore(a);
   const sb = canonicalScore(b);
   for (let i = 0; i < sa.length; i++) {
-    if (sa[i] !== sb[i]) {
-      return sb[i] - sa[i];
-    }
+    if (sa[i] !== sb[i]) { return sb[i] - sa[i]; }
   }
   return 0;
 }
@@ -658,37 +548,25 @@ interface FileEntry {
 async function resolveWorkspaceFile(wsUri: string, wsHash: string): Promise<string> {
   try {
     let p = wsUri;
-    if (p.startsWith("file:///")) {
-      p = p.slice(8);
-    } else if (p.startsWith("file://")) {
-      p = p.slice(7);
-    }
+    if (p.startsWith("file:///")) { p = p.slice(8); }
+    else if (p.startsWith("file://")) { p = p.slice(7); }
     p = decodeURIComponent(p);
-    if (/^\/[A-Z]:/i.test(p)) {
-      p = p.slice(1);
-    }
+    if (/^\/[A-Z]:/i.test(p)) { p = p.slice(1); }
 
     const raw = await fsp.readFile(p, "utf-8");
     const wsContent: unknown = JSON.parse(raw);
     if (isObj(wsContent) && isArr(wsContent.folders) && wsContent.folders.length > 0) {
       const names = (wsContent.folders as unknown[])
         .map((f: unknown) => {
-          const fp =
-            typeof f === "string" ? f : isObj(f) && typeof f.path === "string" ? f.path : "";
-          if (!fp) {
-            return "";
-          }
+          const fp = typeof f === "string" ? f : isObj(f) && typeof f.path === "string" ? f.path : "";
+          if (!fp) { return ""; }
           const parts = fp.replace(/\\/g, "/").split("/").filter(Boolean);
           return parts.length >= 2 ? parts.slice(-2).join("/") : parts[parts.length - 1] || "";
         })
         .filter(Boolean);
-      if (names.length > 0) {
-        return names.join(" + ");
-      }
+      if (names.length > 0) { return names.join(" + "); }
     }
-  } catch {
-    /* ignore */
-  }
+  } catch { /* ignore */ }
   return `multi-root-${wsHash.slice(0, 8)}`;
 }
 
@@ -731,9 +609,7 @@ async function isDirectory(p: string): Promise<boolean> {
   try {
     const st = await fsp.stat(p);
     return st.isDirectory();
-  } catch {
-    return false;
-  }
+  } catch { return false; }
 }
 
 /** Get mtime of a file, or -1 if it doesn't exist / isn't a file. */
@@ -741,40 +617,28 @@ async function fileMtime(p: string): Promise<number> {
   try {
     const st = await fsp.stat(p);
     return st.isFile() ? st.mtimeMs : -1;
-  } catch {
-    return -1;
-  }
+  } catch { return -1; }
 }
 
 /** Read directory entries (withFileTypes), returning empty on error. */
 async function readDirSafe(p: string): Promise<fs.Dirent[]> {
-  try {
-    return await fsp.readdir(p, { withFileTypes: true });
-  } catch {
-    return [];
-  }
+  try { return await fsp.readdir(p, { withFileTypes: true }); } catch { return []; }
 }
 
 /** Read directory names (string[]), returning empty on error. */
 async function readDirNames(p: string): Promise<string[]> {
-  try {
-    return await fsp.readdir(p);
-  } catch {
-    return [];
-  }
+  try { return await fsp.readdir(p); } catch { return []; }
 }
 
 /** Process a single workspace directory for session files. */
 async function processWorkspaceDirForSessions(
   wsRoot: string,
-  dirName: string
+  dirName: string,
 ): Promise<FileEntry[]> {
   const wsDir = path.join(wsRoot, dirName);
   const chatDir = path.join(wsDir, "chatSessions");
 
-  if (!(await isDirectory(chatDir))) {
-    return [];
-  }
+  if (!await isDirectory(chatDir)) { return []; }
 
   // Resolve project name from workspace.json
   let projectName = `workspace-${dirName.slice(0, 8)}`;
@@ -789,9 +653,7 @@ async function processWorkspaceDirForSessions(
         projectName = await resolveWorkspaceFile(wsJson.workspace, dirName);
       }
     }
-  } catch {
-    /* ignore */
-  }
+  } catch { /* ignore */ }
 
   const names = await readDirNames(chatDir);
   const jsonlFiles = names.filter(f => f.endsWith(".jsonl")).sort();
@@ -806,9 +668,11 @@ async function processWorkspaceDirForSessions(
 /** Discover all session JSONL files across workspaceStorage. */
 async function discoverSessionFiles(wsRoot: string): Promise<FileEntry[]> {
   const entries = await readDirSafe(wsRoot);
-  const dirs = entries.filter(e => e.isDirectory()).sort((a, b) => a.name.localeCompare(b.name));
+  const dirs = entries
+    .filter(e => e.isDirectory())
+    .sort((a, b) => a.name.localeCompare(b.name));
 
-  const results = await mapConcurrent(dirs, 16, async entry => {
+  const results = await mapConcurrent(dirs, 16, async (entry) => {
     return processWorkspaceDirForSessions(wsRoot, entry.name);
   });
 
@@ -819,13 +683,13 @@ async function discoverSessionFiles(wsRoot: string): Promise<FileEntry[]> {
 async function discoverTranscriptFiles(wsRoot: string): Promise<Map<string, string[]>> {
   const map = new Map<string, string[]>();
   const entries = await readDirSafe(wsRoot);
-  const dirs = entries.filter(e => e.isDirectory()).sort((a, b) => a.name.localeCompare(b.name));
+  const dirs = entries
+    .filter(e => e.isDirectory())
+    .sort((a, b) => a.name.localeCompare(b.name));
 
-  await mapConcurrent(dirs, 16, async entry => {
+  await mapConcurrent(dirs, 16, async (entry) => {
     const tDir = path.join(wsRoot, entry.name, "GitHub.copilot-chat", "transcripts");
-    if (!(await isDirectory(tDir))) {
-      return;
-    }
+    if (!await isDirectory(tDir)) { return; }
 
     const names = await readDirNames(tDir);
     const files = names.filter(f => f.endsWith(".jsonl")).sort();
@@ -882,9 +746,7 @@ interface ParsedDebugLog {
 
 function parseDebugLogLines(content: string): ParsedDebugLog | null {
   const lines = content.split("\n").filter(l => l.trim());
-  if (lines.length === 0) {
-    return null;
-  }
+  if (lines.length === 0) { return null; }
 
   let sessionId = "";
   let currentTurn = -1;
@@ -897,43 +759,26 @@ function parseDebugLogLines(content: string): ParsedDebugLog | null {
 
   for (const line of lines) {
     let entry: unknown;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (!isObj(entry)) {
-      continue;
-    }
+    try { entry = JSON.parse(line); } catch { continue; }
+    if (!isObj(entry)) { continue; }
 
     const type = entry.type;
     if (type === "session_start") {
       sessionId = typeof entry.sid === "string" ? entry.sid : "";
     } else if (type === "child_session_ref") {
       const childFile = str(entry, "attrs", "childLogFile");
-      if (childFile) {
-        childLogFiles.set(childFile, currentTurn);
-      }
+      if (childFile) { childLogFiles.set(childFile, currentTurn); }
     } else if (type === "turn_start") {
       const tid = get(entry, "attrs", "turnId");
       const parsed = tid !== undefined ? parseInt(String(tid), 10) : NaN;
       currentTurn = Number.isNaN(parsed) ? currentTurn + 1 : parsed;
       if (!turnMap.has(currentTurn)) {
         const ts = typeof entry.ts === "number" ? entry.ts : 0;
-        turnMap.set(currentTurn, {
-          turnIndex: currentTurn,
-          promptTotal: 0,
-          outputTotal: 0,
-          llmCalls: 0,
-          timestamp: ts,
-          nanoAiu: 0,
-        });
+        turnMap.set(currentTurn, { turnIndex: currentTurn, promptTotal: 0, outputTotal: 0, llmCalls: 0, timestamp: ts, nanoAiu: 0 });
       }
     } else if (type === "llm_request") {
       const attrs = entry.attrs;
-      if (!isObj(attrs)) {
-        continue;
-      }
+      if (!isObj(attrs)) { continue; }
       const inp = typeof attrs.inputTokens === "number" ? attrs.inputTokens : 0;
       const out = typeof attrs.outputTokens === "number" ? attrs.outputTokens : 0;
       const nanoAiu = typeof attrs.copilotUsageNanoAiu === "number" ? attrs.copilotUsageNanoAiu : 0;
@@ -944,14 +789,7 @@ function parseDebugLogLines(content: string): ParsedDebugLog | null {
 
       if (currentTurn >= 0) {
         if (!turnMap.has(currentTurn)) {
-          turnMap.set(currentTurn, {
-            turnIndex: currentTurn,
-            promptTotal: 0,
-            outputTotal: 0,
-            llmCalls: 0,
-            timestamp: 0,
-            nanoAiu: 0,
-          });
+          turnMap.set(currentTurn, { turnIndex: currentTurn, promptTotal: 0, outputTotal: 0, llmCalls: 0, timestamp: 0, nanoAiu: 0 });
         }
         const t = turnMap.get(currentTurn)!;
         t.promptTotal += inp;
@@ -962,19 +800,9 @@ function parseDebugLogLines(content: string): ParsedDebugLog | null {
     }
   }
 
-  if (!sessionId || totalLlmCalls === 0) {
-    return null;
-  }
+  if (!sessionId || totalLlmCalls === 0) { return null; }
 
-  return {
-    sessionId,
-    totalPrompt,
-    totalOutput,
-    totalLlmCalls,
-    totalNanoAiu,
-    turnMap,
-    childLogFiles,
-  };
+  return { sessionId, totalPrompt, totalOutput, totalLlmCalls, totalNanoAiu, turnMap, childLogFiles };
 }
 
 /**
@@ -984,16 +812,10 @@ function parseDebugLogLines(content: string): ParsedDebugLog | null {
 async function parseDebugLogDir(sessionDir: string): Promise<DebugLogData | null> {
   const mainJsonl = path.join(sessionDir, "main.jsonl");
   let mainContent: string;
-  try {
-    mainContent = await fsp.readFile(mainJsonl, "utf-8");
-  } catch {
-    return null;
-  }
+  try { mainContent = await fsp.readFile(mainJsonl, "utf-8"); } catch { return null; }
 
   const main = parseDebugLogLines(mainContent);
-  if (!main) {
-    return null;
-  }
+  if (!main) { return null; }
 
   // Aggregate child session files and merge into parent turn data
   let totalPrompt = main.totalPrompt;
@@ -1009,15 +831,11 @@ async function parseDebugLogDir(sessionDir: string): Promise<DebugLogData | null
         const content = await fsp.readFile(childPath, "utf-8");
         const parsed = parseDebugLogLines(content);
         return parsed ? { parsed, parentTurn } : null;
-      } catch {
-        return null;
-      }
+      } catch { return null; }
     });
 
     for (const result of childResults) {
-      if (!result) {
-        continue;
-      }
+      if (!result) { continue; }
       const { parsed: child, parentTurn } = result;
       totalPrompt += child.totalPrompt;
       totalOutput += child.totalOutput;
@@ -1052,13 +870,13 @@ async function parseDebugLogDir(sessionDir: string): Promise<DebugLogData | null
 async function discoverDebugLogsCached(wsRoot: string): Promise<Map<string, DebugLogData>> {
   const map = new Map<string, DebugLogData>();
   const entries = await readDirSafe(wsRoot);
-  const dirs = entries.filter(e => e.isDirectory()).sort((a, b) => a.name.localeCompare(b.name));
+  const dirs = entries
+    .filter(e => e.isDirectory())
+    .sort((a, b) => a.name.localeCompare(b.name));
 
-  await mapConcurrent(dirs, 16, async entry => {
+  await mapConcurrent(dirs, 16, async (entry) => {
     const dlDir = path.join(wsRoot, entry.name, "GitHub.copilot-chat", "debug-logs");
-    if (!(await isDirectory(dlDir))) {
-      return;
-    }
+    if (!await isDirectory(dlDir)) { return; }
 
     const sessionDirs = await readDirNames(dlDir);
 
@@ -1066,9 +884,7 @@ async function discoverDebugLogsCached(wsRoot: string): Promise<Map<string, Debu
       const sessionDir = path.join(dlDir, sid);
       const mainJsonl = path.join(sessionDir, "main.jsonl");
       const mtime = await fileMtime(mainJsonl);
-      if (mtime < 0) {
-        continue;
-      }
+      if (mtime < 0) { continue; }
 
       const cached = _debugLogCache.get(mainJsonl);
       if (cached && cached.mtime === mtime) {
@@ -1107,14 +923,11 @@ export async function scanWorkspaceStorage(): Promise<ScanResult> {
   // Parse session files concurrently with mtime caching
   const bundlesBySession = new Map<string, SessionBundle[]>();
 
-  interface FileWithMtime {
-    file: FileEntry;
-    mtime: number;
-  }
+  interface FileWithMtime { file: FileEntry; mtime: number }
   const filesToProcess: FileWithMtime[] = [];
 
   // Phase 1: stat all files concurrently to get mtimes
-  const mtimes = await mapConcurrent(sessionFiles, 32, async file => {
+  const mtimes = await mapConcurrent(sessionFiles, 32, async (file) => {
     return fileMtime(file.path);
   });
 
@@ -1157,9 +970,7 @@ export async function scanWorkspaceStorage(): Promise<ScanResult> {
 
   // Collect into session groups
   for (const bundle of bundles) {
-    if (!bundle || !bundle.session.sessionId) {
-      continue;
-    }
+    if (!bundle || !bundle.session.sessionId) { continue; }
     const sid = bundle.session.sessionId;
     const list = bundlesBySession.get(sid) ?? [];
     list.push(bundle);
@@ -1194,9 +1005,7 @@ export async function scanWorkspaceStorage(): Promise<ScanResult> {
     // Merge source paths from all copies
     const allSourcePaths: string[] = [];
     for (const b of sessionBundles) {
-      if (b.session.sourcePath) {
-        allSourcePaths.push(b.session.sourcePath);
-      }
+      if (b.session.sourcePath) { allSourcePaths.push(b.session.sourcePath); }
     }
     canonical.session.sourcePaths = allSourcePaths;
     canonical.session.sourceCount = sessionBundles.length;
@@ -1212,17 +1021,13 @@ export async function scanWorkspaceStorage(): Promise<ScanResult> {
     toolCalls.push(...canonical.toolCalls);
     subagentsList.push(...canonical.subagents);
 
-    if (s.promptPreview) {
-      promptPreviews++;
-    }
+    if (s.promptPreview) { promptPreviews++; }
   }
 
   // Enrich sessions and turns with debug-log token data
   for (const s of sessions) {
     const dbg = debugLogMap.get(s.sessionId);
-    if (!dbg) {
-      continue;
-    }
+    if (!dbg) { continue; }
     s.debugTotalPrompt = dbg.totalPrompt;
     s.debugTotalOutput = dbg.totalOutput;
     s.debugTotalAicCredits = dbg.totalNanoAiu / 1_000_000_000;
@@ -1230,9 +1035,7 @@ export async function scanWorkspaceStorage(): Promise<ScanResult> {
 
     // Enrich individual turns + create synthetic turns for unmatched debug-log entries
     for (const dt of dbg.turns) {
-      const matchingTurns = turns.filter(
-        t => t.sessionId === s.sessionId && t.turnIndex === dt.turnIndex
-      );
+      const matchingTurns = turns.filter(t => t.sessionId === s.sessionId && t.turnIndex === dt.turnIndex);
       if (matchingTurns.length > 0) {
         for (const t of matchingTurns) {
           t.debugPromptTokens = dt.promptTotal;
@@ -1242,7 +1045,7 @@ export async function scanWorkspaceStorage(): Promise<ScanResult> {
         }
       } else if (dt.promptTotal > 0 || dt.outputTotal > 0) {
         // chatSession hasn't flushed this turn yet — create synthetic turn from debug-log
-        const ts = dt.timestamp ? new Date(dt.timestamp).toISOString() : s.lastTimestamp || "";
+        const ts = dt.timestamp ? new Date(dt.timestamp).toISOString() : (s.lastTimestamp || "");
         turns.push({
           sessionId: s.sessionId,
           turnIndex: dt.turnIndex,
