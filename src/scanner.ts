@@ -571,8 +571,37 @@ async function resolveWorkspaceFile(wsUri: string, wsHash: string): Promise<stri
 }
 
 function getWorkspaceStoragePath(): string {
-  const appData = process.env.APPDATA ?? path.join(os.homedir(), "AppData", "Roaming");
-  return path.join(appData, "Code", "User", "workspaceStorage");
+  const home = os.homedir();
+
+  const candidates = [
+    // Linux
+    path.join(home, ".config", "Code", "User", "workspaceStorage"),
+    path.join(home, ".config", "Code - Insiders", "User", "workspaceStorage"),
+
+    // Dev container
+    path.join(home, ".vscode-server", "data", "User", "workspaceStorage"),
+  ];
+
+  // Windows
+  const appData = process.env.APPDATA;
+  if (appData) {
+    candidates.push(path.join(appData, "Code", "User", "workspaceStorage"));
+    candidates.push(path.join(appData, "Code - Insiders", "User", "workspaceStorage"));
+  }
+
+  // Use the first candidate that exists and is a directory
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p) && fs.statSync(p).isDirectory()) {
+        return p;
+      }
+    } catch {
+      // Ignore invalid candidate and continue checking next.
+    }
+  }
+
+  // Return the first Linux default even if it doesn't exist yet.
+  return candidates[0];
 }
 
 /** Check if a path is a directory (non-throwing). */
