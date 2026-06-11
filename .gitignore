@@ -4,3 +4,4 @@ out/
 gen-icon.ps1
 copilot_all_tools.jsonl
 .history/
+.release-notes-*.md
