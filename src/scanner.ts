@@ -570,38 +570,77 @@ async function resolveWorkspaceFile(wsUri: string, wsHash: string): Promise<stri
   return `multi-root-${wsHash.slice(0, 8)}`;
 }
 
-function getWorkspaceStoragePath(): string {
+/**
+ * Build the ordered list of candidate workspaceStorage roots to probe.
+ * Order: explicit override → env override → portable → Linux → remote → macOS → Windows.
+ * Insiders variants are included next to each stable entry.
+ */
+export function getWorkspaceStorageCandidates(override?: string): string[] {
   const home = os.homedir();
+  const candidates: string[] = [];
 
-  const candidates = [
-    // Linux
-    path.join(home, ".config", "Code", "User", "workspaceStorage"),
-    path.join(home, ".config", "Code - Insiders", "User", "workspaceStorage"),
+  // Explicit user override (from VS Code setting)
+  if (override && override.trim()) {
+    candidates.push(override.trim());
+  }
 
-    // Dev container
-    path.join(home, ".vscode-server", "data", "User", "workspaceStorage"),
-  ];
+  // Env override — useful for tests, CI, and unusual installs.
+  const envOverride = process.env.COPILOT_USAGE_WORKSPACE_STORAGE;
+  if (envOverride && envOverride.trim()) {
+    candidates.push(envOverride.trim());
+  }
+
+  // Portable VS Code (https://code.visualstudio.com/docs/editor/portable)
+  const portable = process.env.VSCODE_PORTABLE;
+  if (portable) {
+    candidates.push(path.join(portable, "user-data", "User", "workspaceStorage"));
+  }
+
+  // Linux
+  candidates.push(path.join(home, ".config", "Code", "User", "workspaceStorage"));
+  candidates.push(path.join(home, ".config", "Code - Insiders", "User", "workspaceStorage"));
+
+  // Remote (dev container / Remote-SSH / WSL — extension host runs server-side)
+  candidates.push(path.join(home, ".vscode-server", "data", "User", "workspaceStorage"));
+  candidates.push(path.join(home, ".vscode-server-insiders", "data", "User", "workspaceStorage"));
+
+  // macOS
+  candidates.push(path.join(home, "Library", "Application Support", "Code", "User", "workspaceStorage"));
+  candidates.push(path.join(home, "Library", "Application Support", "Code - Insiders", "User", "workspaceStorage"));
 
   // Windows
   const appData = process.env.APPDATA ?? path.join(home, "AppData", "Roaming");
-  if (appData) {
-    candidates.push(path.join(appData, "Code", "User", "workspaceStorage"));
-    candidates.push(path.join(appData, "Code - Insiders", "User", "workspaceStorage"));
-  }
+  candidates.push(path.join(appData, "Code", "User", "workspaceStorage"));
+  candidates.push(path.join(appData, "Code - Insiders", "User", "workspaceStorage"));
 
-  // Use the first candidate that exists and is a directory
-  for (const p of candidates) {
-    try {
-      if (fs.existsSync(p) && fs.statSync(p).isDirectory()) {
-        return p;
-      }
-    } catch {
-      // Ignore invalid candidate and continue checking next.
+  return candidates;
+}
+
+/** Default workspaceStorage path for the current platform, used when no candidate exists yet. */
+function defaultWorkspaceStoragePath(): string {
+  const home = os.homedir();
+  switch (process.platform) {
+    case "win32": {
+      const appData = process.env.APPDATA ?? path.join(home, "AppData", "Roaming");
+      return path.join(appData, "Code", "User", "workspaceStorage");
     }
+    case "darwin":
+      return path.join(home, "Library", "Application Support", "Code", "User", "workspaceStorage");
+    default:
+      return path.join(home, ".config", "Code", "User", "workspaceStorage");
   }
+}
 
-  // Return the first Linux default even if it doesn't exist yet.
-  return candidates[0];
+/**
+ * Resolve the active VS Code workspaceStorage directory.
+ * Returns the first candidate that exists and is a directory, falling back
+ * to a platform-appropriate default when none exist yet.
+ */
+export async function getWorkspaceStoragePath(override?: string): Promise<string> {
+  for (const p of getWorkspaceStorageCandidates(override)) {
+    if (await isDirectory(p)) { return p; }
+  }
+  return defaultWorkspaceStoragePath();
 }
 
 /** Check if a path is a directory (non-throwing). */
@@ -910,8 +949,8 @@ const _debugLogCache = new Map<string, { mtime: number; data: DebugLogData }>();
 
 // ─── Main Scanner (Async) ─────────────────────────────────────
 
-export async function scanWorkspaceStorage(): Promise<ScanResult> {
-  const wsRoot = getWorkspaceStoragePath();
+export async function scanWorkspaceStorage(workspaceStorageOverride?: string): Promise<ScanResult> {
+  const wsRoot = await getWorkspaceStoragePath(workspaceStorageOverride);
 
   // Discover all file locations concurrently
   const [sessionFiles, transcriptMap, debugLogMap] = await Promise.all([

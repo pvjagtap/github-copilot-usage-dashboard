@@ -17,13 +17,16 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { getWorkspaceStorageCandidates } from "../src/scanner";
 
 // ─── Configuration ────────────────────────────────────────────
 
 const WORKSPACE_STORAGE_ROOTS = (() => {
   const candidates = [
+    // Test-specific override kept for backwards compatibility.
     "D:/vscode/workspaceStorage",
-    path.join(process.env.APPDATA || "", "Code/User/workspaceStorage"),
+    // Cross-platform auto-detected candidates (Linux / macOS / Windows / dev container / Insiders / portable).
+    ...getWorkspaceStorageCandidates(),
   ].filter(p => fs.existsSync(p));
   // Deduplicate roots that resolve to the same physical path (e.g. junctions/symlinks)
   const seen = new Set<string>();

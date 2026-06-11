@@ -46,12 +46,25 @@ Open: **Command Palette** > `Copilot Usage: Open Dashboard`
 
 ## Data Sources
 
-1. **VS Code chatSessions JSONL** at `%APPDATA%/Code/User/workspaceStorage/{hash}/chatSessions/*.jsonl`
-2. **VS Code debug-logs** at `%APPDATA%/Code/User/workspaceStorage/{hash}/GitHub.copilot-chat/debug-logs/{session}/`
+The scanner auto-detects the VS Code `workspaceStorage` root across platforms (override with `copilotUsage.workspaceStoragePath`):
+
+| Platform                         | Path                                                       |
+| -------------------------------- | ---------------------------------------------------------- |
+| Windows                          | `%APPDATA%/Code/User/workspaceStorage`                     |
+| macOS                            | `~/Library/Application Support/Code/User/workspaceStorage` |
+| Linux                            | `~/.config/Code/User/workspaceStorage`                     |
+| Dev container / Remote-SSH / WSL | `~/.vscode-server/data/User/workspaceStorage`              |
+| VS Code Insiders                 | `Code - Insiders` / `.vscode-server-insiders` equivalents  |
+| Portable                         | `$VSCODE_PORTABLE/user-data/User/workspaceStorage`         |
+
+Inside that root the extension reads:
+
+1. **chatSessions JSONL** at `{root}/{hash}/chatSessions/*.jsonl`
+2. **debug-logs** at `{root}/{hash}/GitHub.copilot-chat/debug-logs/{session}/`
    - `main.jsonl` — per-turn LLM call data with actual token counts and `copilotUsageNanoAiu` (exact API billing)
    - `runSubagent-*.jsonl` — subagent/child session LLM calls (aggregated into parent session totals)
    - `title-*.jsonl` — title-generation calls
-3. **VS Code transcripts** at `%APPDATA%/Code/User/workspaceStorage/{hash}/GitHub.copilot-chat/transcripts/`
+3. **transcripts** at `{root}/{hash}/GitHub.copilot-chat/transcripts/`
 4. **[Oh My Pi](https://github.com/can1357/oh-my-pi) (OMP) agent sessions** at `~/.omp/agent/sessions/**/*.jsonl` — scanned concurrently with mtime caching; contributes LLM calls, tokens, and AIC credits to the shared budget
 5. **[Pi](https://github.com/earendil-works/pi) coding-agent sessions** at `~/.pi/agent/sessions/**/*.jsonl` — same scanning model as OMP
 6. **Live OTel** (optional) — built-in VSCode OTLP HTTP receiver on port 14318

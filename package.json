@@ -75,6 +75,16 @@
     ],
     "configuration": [
       {
+        "title": "Copilot Usage — General",
+        "properties": {
+          "copilotUsage.workspaceStoragePath": {
+            "type": "string",
+            "default": "",
+            "description": "Optional absolute path to a VS Code workspaceStorage directory. When empty, the extension auto-detects across Linux (~/.config/Code), macOS (~/Library/Application Support/Code), Windows (%APPDATA%/Code), dev containers / Remote-SSH / WSL (~/.vscode-server), and VS Code Insiders. Set this if you run a portable install, a fork, or need to point at a specific install."
+          }
+        }
+      },
+      {
         "title": "Copilot Usage — AI Credits (AIC)",
         "properties": {
           "copilotUsage.aic.plan": {

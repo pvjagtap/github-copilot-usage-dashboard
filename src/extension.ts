@@ -93,8 +93,12 @@ function buildData(): DashboardData {
 async function runScan(): Promise<void> {
   try {
     const t0 = Date.now();
+    const wsOverride = vscode.workspace
+      .getConfiguration("copilotUsage")
+      .get<string>("workspaceStoragePath", "")
+      .trim();
     const [scanResult, agentResult] = await Promise.all([
-      scanWorkspaceStorage(),
+      scanWorkspaceStorage(wsOverride || undefined),
       scanAgentSessions().catch((err: unknown) => {
         output.appendLine(`Agent scan error: ${err}`);
         return undefined as AgentScanResult | undefined;
