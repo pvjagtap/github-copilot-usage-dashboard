@@ -159,13 +159,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // never block activation on a network call.
   void detectAndApplyPlan(context, m => output.appendLine(m));
 
-  // Initial scan of chatSession files — fire-and-forget so we never block
-  // activate(). The dashboard/statusBar render empty state until the first
-  // scan finishes; the file watcher then takes over for live updates.
-  void runScan().then(() => {
-    updateStatusBar();
-    DashboardPanel.updateIfVisible(buildData());
-  });
+  // Initial scan of chatSession files — MUST complete before activate()
+  // returns so the dashboard, status bar, and any "openDashboard" command
+  // see populated data on cold start. v1.9.14 tried to make this fire-
+  // and-forget and shipped a dashboard that rendered all zeros until the
+  // scan completed — unacceptable. The file watcher takes over for live
+  // updates after this initial scan.
+  await runScan();
 
   // Start OTel receiver
   receiver = new OTelReceiver();

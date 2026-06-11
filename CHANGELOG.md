@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.15] - 2026-06-10
+
+### Fixed
+
+- **Reverted the v1.9.14 fire-and-forget initial scan.** With the initial scan running in the background, opening the dashboard on cold start showed all zeros (`0.0 AIC / 0 sessions / 0 turns`) until the scan finished — sometimes seconds later, sometimes never if the watcher fired first and overwrote a partial cache. Activation now awaits the first scan again so the dashboard, status bar, and any subsequent commands always see populated data on cold start. The watcher + 30 s safety-net handle every update after that.
+
+### Kept from v1.9.14
+
+- `deactivate()` cleanup of the v1.9.13 cooldown timer and the recursive `fs.watch` handle — this part was a real fix and stays.
+
 ## [1.9.14] - 2026-06-10
 
 ### Fixed
