@@ -390,16 +390,24 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
       const debugSessionAIC = debugTurnsToday.reduce((s, t) => s + t.debugAicCredits, 0);
       sessionAIC = Math.max(sessionAIC, debugSessionAIC);
 
-      // lastRequestAIC: use the most recent debug-log turn's exact AIC, but
-      // only if it is at least as new as the OTel lastRequest (so OTel still
-      // wins for the truly latest in-flight request not yet in debug logs).
-      const mostRecentDebug = debugTurnsToday.reduce(
-        (best, t) => (!best || t.timestamp > best.timestamp ? t : best),
-        undefined as Turn | undefined
-      );
+      // lastRequestAIC: pick the turn whose LAST individual llm_request is
+      // most recent, then use that single request's AIC — not the turn total.
+      // (A turn with 15 tool calls has 15 llm_request entries; summing them
+      // would show ~10x the actual just-finished API call's bill.) Falls back
+      // to the turn-total `debugAicCredits` if per-request data is missing.
+      const mostRecentDebug = debugTurnsToday.reduce((best, t) => {
+        const tTs = t.debugLastRequestTs || t.timestamp;
+        const bTs = best ? best.debugLastRequestTs || best.timestamp : "";
+        return !best || tTs > bTs ? t : best;
+      }, undefined as Turn | undefined);
       const otelLastTs = liveStats.lastRequest?.timestamp ?? "";
-      if (mostRecentDebug && (mostRecentDebug.timestamp >= otelLastTs || lastRequestAIC === 0)) {
-        lastRequestAIC = mostRecentDebug.debugAicCredits;
+      if (mostRecentDebug) {
+        const debugTs = mostRecentDebug.debugLastRequestTs || mostRecentDebug.timestamp;
+        if (debugTs >= otelLastTs || lastRequestAIC === 0) {
+          lastRequestAIC = mostRecentDebug.debugLastRequestAic > 0
+            ? mostRecentDebug.debugLastRequestAic
+            : mostRecentDebug.debugAicCredits;
+        }
       }
     }
 
@@ -456,7 +464,15 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
         if (turn.timestamp > lastSeen) {
           lastSeen = turn.timestamp;
         }
-        if (!mostRecentTurn || turn.timestamp > mostRecentTurn.timestamp) {
+        // Pick by per-request timestamp when available (the time the LAST
+        // individual llm_request returned, not the turn_start time). This
+        // matches the OTel-branch logic so `AIC (last req)` always shows the
+        // value of the truly latest API call, not a turn-total surrogate.
+        const turnLastTs = turn.debugLastRequestTs || turn.timestamp;
+        const bestLastTs = mostRecentTurn
+          ? mostRecentTurn.debugLastRequestTs || mostRecentTurn.timestamp
+          : "";
+        if (!mostRecentTurn || turnLastTs > bestLastTs) {
           mostRecentTurn = turn;
         }
         // sessionAIC: prefer exact billed AIC from copilotUsageNanoAiu when
@@ -473,7 +489,11 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
 
       let lastRequestAIC = 0;
       if (mostRecentTurn) {
-        if (mostRecentTurn.debugAicCredits > 0) {
+        // Prefer per-request value (single API call) over turn total (sum of
+        // all llm_requests in the turn).
+        if (mostRecentTurn.debugLastRequestAic > 0) {
+          lastRequestAIC = mostRecentTurn.debugLastRequestAic;
+        } else if (mostRecentTurn.debugAicCredits > 0) {
           lastRequestAIC = mostRecentTurn.debugAicCredits;
         } else {
           const lrUsage = calculator.calculateCredits(

@@ -18,7 +18,13 @@ import { HookManager } from "./hookManager";
 import { detectAndApplyPlan, resetPlanDetection } from "./planDetector";
 
 const OTEL_PORT = 14318;
-const DEFAULT_REFRESH_MS = 120_000;
+/**
+ * Safety-net periodic scan when the live debug-log watcher and OTel receiver
+ * aren't firing (e.g. fs.watch missed an event on a network share). Live
+ * updates come from the file watcher (`setupDebugLogWatcher`) which fires
+ * within ~1-2 seconds of any `main.jsonl` write, so this is only a fallback.
+ */
+const DEFAULT_REFRESH_MS = 30_000;
 /** Debounce interval for OTel-triggered dashboard/status updates (ms) */
 const OTEL_DEBOUNCE_MS = 2_000;
 
@@ -37,7 +43,12 @@ let output: vscode.OutputChannel;
  * instead of waiting up to 120s for the periodic timer.
  */
 let debugLogWatcher: fs.FSWatcher | undefined;
-let debugLogDebounceTimer: ReturnType<typeof setTimeout> | undefined;
+/** Cooldown timer that suppresses duplicate scans within 500 ms of a fire. */
+let debugLogCooldownTimer: ReturnType<typeof setTimeout> | undefined;
+/** Set true while the cooldown is active if another event arrived; triggers a single trailing scan. */
+let debugLogTrailingPending = false;
+/** Tracks whether a runScan() is in flight so we never queue two in parallel. */
+let debugLogScanInFlight = false;
 /** ISO timestamp of when this VS Code instance activated the extension — used to scope "current" to this instance only */
 let activationTime: string;
 /** Cached dashboard data — invalidated when scan or OTel changes */
@@ -441,9 +452,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   void setupDebugLogWatcher();
   context.subscriptions.push({
     dispose: () => {
-      if (debugLogDebounceTimer) {
-        clearTimeout(debugLogDebounceTimer);
-        debugLogDebounceTimer = undefined;
+      if (debugLogCooldownTimer) {
+        clearTimeout(debugLogCooldownTimer);
+        debugLogCooldownTimer = undefined;
       }
       if (debugLogWatcher) {
         try {
@@ -479,18 +490,7 @@ async function setupDebugLogWatcher(): Promise<void> {
       if (!filename || !filename.toString().endsWith("main.jsonl")) {
         return;
       }
-      if (debugLogDebounceTimer) {
-        return;
-      }
-      // Same 2s debounce as the OTel path — collapses bursts of writes from
-      // a single in-flight request into a single rescan.
-      debugLogDebounceTimer = setTimeout(() => {
-        debugLogDebounceTimer = undefined;
-        void runScan().then(() => {
-          updateStatusBar();
-          DashboardPanel.updateIfVisible(buildData());
-        });
-      }, OTEL_DEBOUNCE_MS);
+      fireDebugLogScan();
     });
 
     debugLogWatcher.on("error", err => {
@@ -499,6 +499,55 @@ async function setupDebugLogWatcher(): Promise<void> {
     output.appendLine(`Watching debug-logs under ${wsRoot} for real-time updates`);
   } catch (err) {
     output.appendLine(`debug-log watcher setup failed (non-fatal): ${err}`);
+  }
+}
+
+/**
+ * Leading-edge fire + trailing coalesce. The first event triggers a scan
+ * immediately (no debounce wait). While that scan and the 500 ms cooldown are
+ * pending, additional events are coalesced into a single trailing scan that
+ * runs once the cooldown elapses. Result: the dashboard reacts within ~10 ms
+ * of the first write of an in-flight request, then catches up once more after
+ * the burst finishes so the final totals are correct.
+ *
+ * runScan() itself is also serialized — we never have two scans in flight.
+ */
+function fireDebugLogScan(): void {
+  if (debugLogCooldownTimer) {
+    // We're inside the cooldown window — record that a trailing scan is needed.
+    debugLogTrailingPending = true;
+    return;
+  }
+
+  // Leading edge: arm the cooldown and fire immediately.
+  debugLogCooldownTimer = setTimeout(() => {
+    debugLogCooldownTimer = undefined;
+    if (debugLogTrailingPending) {
+      debugLogTrailingPending = false;
+      void runScanSerialized();
+    }
+  }, 500);
+  void runScanSerialized();
+}
+
+/**
+ * Serialized wrapper around runScan() so concurrent watcher events never
+ * trigger two scans in parallel (they'd race on the mtime cache and waste
+ * I/O). If a scan is already in flight, the caller is silently dropped —
+ * the cooldown's trailing scan will pick up any missed work.
+ */
+async function runScanSerialized(): Promise<void> {
+  if (debugLogScanInFlight) {
+    debugLogTrailingPending = true;
+    return;
+  }
+  debugLogScanInFlight = true;
+  try {
+    await runScan();
+    updateStatusBar();
+    DashboardPanel.updateIfVisible(buildData());
+  } finally {
+    debugLogScanInFlight = false;
   }
 }
 

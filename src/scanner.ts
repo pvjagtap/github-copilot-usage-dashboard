@@ -64,6 +64,14 @@ export interface Turn {
   debugLlmCalls: number;
   /** Actual AI credits for this turn from API responses (nano-AIU / 1e9). 0 if not available. */
   debugAicCredits: number;
+  /**
+   * AI credits for the LAST single llm_request in this turn (not the sum).
+   * Used by the dashboard's `AIC (last req)` widget so it shows one API
+   * call's bill, not the entire turn's. 0 if not available.
+   */
+  debugLastRequestAic: number;
+  /** ISO timestamp of the LAST single llm_request in this turn. */
+  debugLastRequestTs: string;
   toolCallRounds: number;
   toolCallResults: number;
   workspaceName: string;
@@ -217,6 +225,8 @@ function emitTurnAndToolCalls(
     debugCachedTokens: 0,
     debugLlmCalls: 0,
     debugAicCredits: 0,
+    debugLastRequestAic: 0,
+    debugLastRequestTs: "",
     toolCallRounds: isArr(meta.toolCallRounds) ? meta.toolCallRounds.length : 0,
     toolCallResults: isArr(meta.toolCallResults) ? meta.toolCallResults.length : 0,
     workspaceName,
@@ -448,6 +458,8 @@ function parseSessionContent(
                 debugCachedTokens: 0,
                 debugLlmCalls: 0,
                 debugAicCredits: 0,
+                debugLastRequestAic: 0,
+                debugLastRequestTs: "",
                 toolCallRounds: 0,
                 toolCallResults: 0,
                 workspaceName: extractWorkspaceName(undefined, wsHash),
@@ -866,6 +878,14 @@ interface DebugLogTurnTokens {
   timestamp: number;
   /** Sum of copilotUsageNanoAiu for all LLM calls in this turn */
   nanoAiu: number;
+  /**
+   * nano-AIU of the LAST single llm_request in this turn. Distinct from
+   * `nanoAiu` (which is the sum across the turn). Used so `AIC (last req)`
+   * shows a single API call's bill, not a turn total.
+   */
+  lastRequestNanoAiu: number;
+  /** Epoch ms timestamp of the last single llm_request in this turn. */
+  lastRequestTs: number;
 }
 
 interface DebugLogData {
@@ -942,6 +962,8 @@ function parseDebugLogLines(content: string): ParsedDebugLog | null {
           llmCalls: 0,
           timestamp: ts,
           nanoAiu: 0,
+          lastRequestNanoAiu: 0,
+          lastRequestTs: 0,
         });
       }
     } else if (type === "llm_request") {
@@ -976,6 +998,8 @@ function parseDebugLogLines(content: string): ParsedDebugLog | null {
             llmCalls: 0,
             timestamp: 0,
             nanoAiu: 0,
+            lastRequestNanoAiu: 0,
+            lastRequestTs: 0,
           });
         }
         const t = turnMap.get(currentTurn)!;
@@ -988,6 +1012,12 @@ function parseDebugLogLines(content: string): ParsedDebugLog | null {
         // dashboard's "most recent turn" picker reflects real last activity.
         if (eventTs > t.timestamp) {
           t.timestamp = eventTs;
+        }
+        // Track the single most recent llm_request separately so
+        // `AIC (last req)` shows one API call's bill, not a turn total.
+        if (eventTs >= t.lastRequestTs) {
+          t.lastRequestTs = eventTs;
+          t.lastRequestNanoAiu = nanoAiu;
         }
       }
     }
@@ -1270,6 +1300,10 @@ export async function scanWorkspaceStorage(workspaceStorageOverride?: string): P
           t.debugCachedTokens = dt.cachedTotal;
           t.debugLlmCalls = dt.llmCalls;
           t.debugAicCredits = dt.nanoAiu / 1_000_000_000;
+          t.debugLastRequestAic = dt.lastRequestNanoAiu / 1_000_000_000;
+          t.debugLastRequestTs = dt.lastRequestTs
+            ? new Date(dt.lastRequestTs).toISOString()
+            : "";
         }
       } else if (dt.promptTotal > 0 || dt.outputTotal > 0) {
         // chatSession hasn't flushed this turn yet — create synthetic turn from debug-log
@@ -1286,6 +1320,10 @@ export async function scanWorkspaceStorage(workspaceStorageOverride?: string): P
           debugCachedTokens: dt.cachedTotal,
           debugLlmCalls: dt.llmCalls,
           debugAicCredits: dt.nanoAiu / 1_000_000_000,
+          debugLastRequestAic: dt.lastRequestNanoAiu / 1_000_000_000,
+          debugLastRequestTs: dt.lastRequestTs
+            ? new Date(dt.lastRequestTs).toISOString()
+            : "",
           toolCallRounds: dt.llmCalls > 1 ? dt.llmCalls - 1 : 0,
           toolCallResults: 0,
           workspaceName: "",

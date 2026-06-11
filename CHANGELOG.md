@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.13] - 2026-06-10
+
+### Fixed
+
+- **`AIC (last req)` now shows ONE API call's bill, not the entire turn's sum.** A turn that fires many tool-call rounds writes one `llm_request` entry to `main.jsonl` per call (10–20 is common for agent turns). We were summing them and labelling the sum `AIC (last req)` — so a turn that actually billed ~8 AIC per call showed up as `132.0` on the dashboard. The scanner now tracks `lastRequestNanoAiu` and `lastRequestTs` per turn (the single most recent llm_request, not the cumulative total), and the dashboard's `AIC (last req)` widget uses those.
+- **Pure event-driven live updates — dashboard reacts within ~10 ms of a `main.jsonl` write.** Replaced trailing-edge debounce (every event waited 500–2000 ms before scanning) with leading-edge fire + 500 ms cooldown + serialized trailing coalesce. Result: first event fires the scan immediately; bursts during one in-flight request are coalesced into a single trailing scan after the cooldown so the final totals are correct. Scans are also serialized so two watcher events never race two scans.
+- **Safety-net periodic timer dropped from 120 s to 30 s.** The watcher is the primary live path; the timer is only a backstop for cases where `fs.watch` misses an event (e.g. network shares).
+
 ## [1.9.12] - 2026-06-10
 
 ### Added
