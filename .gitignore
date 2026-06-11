@@ -1,5 +1,6 @@
 node_modules/
 out/
+tests-out/
 *.vsix
 gen-icon.ps1
 copilot_all_tools.jsonl

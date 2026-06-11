@@ -211,22 +211,37 @@ export interface LiveOtelData {
 
 function computeDaily(turns: Turn[]): DailyRow[] {
   const map = new Map<string, DailyRow>();
-  for (const t of turns) {
-    if (!t.timestamp) { continue; }
-    const day = t.timestamp.slice(0, 10);
-    const model = t.modelFamily || "unknown";
+  const bump = (day: string, model: string, prompt: number, output: number, toolRounds: number) => {
     const key = `${day}:${model}`;
-    // Prefer debug-log actual tokens over chatSession snapshot
-    const prompt = t.debugPromptTokens || t.promptTokens;
-    const output = t.debugOutputTokens || t.outputTokens;
     const existing = map.get(key);
     if (existing) {
       existing.prompt += prompt;
       existing.output += output;
-      existing.toolRounds += t.toolCallRounds;
+      existing.toolRounds += toolRounds;
       existing.turns++;
     } else {
-      map.set(key, { day, model, prompt, output, toolRounds: t.toolCallRounds, turns: 1 });
+      map.set(key, { day, model, prompt, output, toolRounds, turns: 1 });
+    }
+  };
+  for (const t of turns) {
+    if (!t.timestamp) { continue; }
+    const day = t.timestamp.slice(0, 10);
+    // Prefer the per-llm_request `debugByModel` breakdown when present so the
+    // daily-by-model view attributes auxiliary calls (title gpt-4o-mini,
+    // subagent haiku) to their actual model. Falls back to the parent turn's
+    // single `modelFamily` for non-debug-log turns or older logs.
+    if (t.debugByModel) {
+      for (const [model, mt] of Object.entries(t.debugByModel)) {
+        bump(day, model, mt.prompt, mt.output, 0);
+      }
+    } else {
+      bump(
+        day,
+        t.modelFamily || "unknown",
+        t.debugPromptTokens || t.promptTokens,
+        t.debugOutputTokens || t.outputTokens,
+        t.toolCallRounds,
+      );
     }
   }
   return Array.from(map.values()).sort((a, b) => a.day.localeCompare(b.day) || a.model.localeCompare(b.model));
@@ -449,6 +464,14 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
 
     if (debugTurnsToday.length > 0) {
       const byModelMap = new Map<string, { model: string; requests: number; prompt: number; completion: number; traceCached: number; metricCached: number; cached: number }>();
+      const getOrCreateRow = (model: string) => {
+        let row = byModelMap.get(model);
+        if (!row) {
+          row = { model, requests: 0, prompt: 0, completion: 0, traceCached: 0, metricCached: 0, cached: 0 };
+          byModelMap.set(model, row);
+        }
+        return row;
+      };
       let requests = 0;
       let prompt = 0;
       let completion = 0;
@@ -462,24 +485,35 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
       let mostRecentTurn: Turn | undefined;
 
       for (const turn of debugTurnsToday) {
-        const model = turn.modelFamily || "unknown";
-        if (!byModelMap.has(model)) {
-          byModelMap.set(model, { model, requests: 0, prompt: 0, completion: 0, traceCached: 0, metricCached: 0, cached: 0 });
-        }
-        const row = byModelMap.get(model)!;
         const turnRequests = Math.max(1, turn.debugLlmCalls || 0);
         const turnCached = turn.debugCachedTokens || 0;
         requests += turnRequests;
         prompt += turn.debugPromptTokens;
         completion += turn.debugOutputTokens;
         cached += turnCached;
-        row.requests += turnRequests;
-        row.prompt += turn.debugPromptTokens;
-        row.completion += turn.debugOutputTokens;
-        // Surface cache-read tokens under traceCached so the per-model breakdown
-        // matches the OTel column layout (Trace Cache / Metric Cache / Effective).
-        row.traceCached += turnCached;
-        row.cached += turnCached;
+        // Per-model rows: prefer the scanner's per-llm_request `debugByModel`
+        // breakdown (captures title gpt-4o-mini, subagent haiku, etc.) and only
+        // fall back to the parent's single `modelFamily` when byModel is absent
+        // (older debug logs that predate per-request model capture).
+        if (turn.debugByModel) {
+          for (const [model, mt] of Object.entries(turn.debugByModel)) {
+            const row = getOrCreateRow(model);
+            row.requests += mt.calls;
+            row.prompt += mt.prompt;
+            row.completion += mt.output;
+            row.traceCached += mt.cached;
+            row.cached += mt.cached;
+          }
+        } else {
+          const row = getOrCreateRow(turn.modelFamily || "unknown");
+          row.requests += turnRequests;
+          row.prompt += turn.debugPromptTokens;
+          row.completion += turn.debugOutputTokens;
+          // Surface cache-read tokens under traceCached so the per-model breakdown
+          // matches the OTel column layout (Trace Cache / Metric Cache / Effective).
+          row.traceCached += turnCached;
+          row.cached += turnCached;
+        }
         if (turn.timestamp > lastSeen) {
           lastSeen = turn.timestamp;
         }
@@ -501,7 +535,8 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
         if (turn.debugAicCredits > 0) {
           sessionAIC += turn.debugAicCredits;
         } else {
-          const usage = calculator.calculateCredits(model, turn.debugPromptTokens, turn.debugOutputTokens, turnCached);
+          const fallbackModel = turn.modelFamily || "unknown";
+          const usage = calculator.calculateCredits(fallbackModel, turn.debugPromptTokens, turn.debugOutputTokens, turnCached);
           sessionAIC += usage.totalCredits;
         }
       }
@@ -566,15 +601,47 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
   // Check if we have actual AIC data from the API
   const hasActualAic = aicTurns.some(t => t.debugAicCredits > 0);
 
-  const creditEntries = aicTurns.map(t => ({
-      model: t.modelFamily || "unknown",
-      inputTokens: t.debugPromptTokens || t.promptTokens,
-      outputTokens: t.debugOutputTokens || t.outputTokens,
-      cachedTokens: 0, // cached not available per-turn from chatSession data
-      date: t.timestamp.slice(0, 10),
-      // Actual AIC from API (if available) — overrides computed credits
-      actualCredits: t.debugAicCredits > 0 ? t.debugAicCredits : undefined,
-    }));
+  // Per-turn → per-model creditEntries. When the scanner captured a
+  // `debugByModel` breakdown (one entry per (model) for all llm_requests in
+  // the turn, including merged children), emit one entry per (turn, model)
+  // so the AIC dashboard's per-model rows surface auxiliary calls — title
+  // generation on gpt-4o-mini, subagent rounds on claude-haiku-4.5, etc.
+  // Otherwise fall back to a single entry stamped with the parent turn's
+  // modelFamily (legacy behaviour for debug logs that predate per-request
+  // model capture, or non-debug-log turns).
+  const creditEntries: Array<{
+    model: string;
+    inputTokens: number;
+    outputTokens: number;
+    cachedTokens: number;
+    date: string;
+    actualCredits?: number;
+  }> = [];
+  for (const t of aicTurns) {
+    const date = t.timestamp.slice(0, 10);
+    if (t.debugByModel) {
+      for (const [model, mt] of Object.entries(t.debugByModel)) {
+        creditEntries.push({
+          model,
+          inputTokens: mt.prompt,
+          outputTokens: mt.output,
+          cachedTokens: mt.cached,
+          date,
+          actualCredits: mt.nanoAiu > 0 ? mt.nanoAiu / 1_000_000_000 : undefined,
+        });
+      }
+    } else {
+      creditEntries.push({
+        model: t.modelFamily || "unknown",
+        inputTokens: t.debugPromptTokens || t.promptTokens,
+        outputTokens: t.debugOutputTokens || t.outputTokens,
+        cachedTokens: 0, // cached not available per-turn from chatSession data
+        date,
+        // Actual AIC from API (if available) — overrides computed credits
+        actualCredits: t.debugAicCredits > 0 ? t.debugAicCredits : undefined,
+      });
+    }
+  }
 
   // Add live OTel data if available (these have cached token info)
   // Only include if current date is on/after AIC effective date

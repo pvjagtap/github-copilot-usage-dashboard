@@ -24,7 +24,7 @@
 import * as vscode from "vscode";
 import { ScanResult, Turn } from "./scanner";
 import { LiveStats } from "./otelReceiver";
-import { AICCalculator, AICConfig } from "./aicCredits";
+import { AICCalculator } from "./aicCredits";
 
 export type LimitStage = "none" | "warn" | "brace" | "limit";
 
@@ -129,7 +129,6 @@ function computeTodayAIC(
 ): number {
   let total = 0;
   const windowStartIso = windowStart.toISOString();
-  const seenRequestIds = new Set<string>();
 
   if (scan && scan.turns.length > 0) {
     for (const t of scan.turns as Turn[]) {

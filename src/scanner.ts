@@ -72,9 +72,28 @@ export interface Turn {
   debugLastRequestAic: number;
   /** ISO timestamp of the LAST single llm_request in this turn. */
   debugLastRequestTs: string;
+  /**
+   * Per-model breakdown of all llm_requests in this turn (parent + merged
+   * child sessions). Keyed by the `attrs.model` reported on each `llm_request`
+   * entry in main.jsonl / child *.jsonl. Surfaces small/auxiliary models
+   * (e.g. `gpt-4o-mini-2024-07-18` used for title generation, `claude-haiku-4.5`
+   * used by subagents) that would otherwise be hidden under the parent turn's
+   * single `modelFamily`. Undefined when no llm_requests carried a model attr.
+   */
+  debugByModel?: Record<string, DebugModelTotals>;
   toolCallRounds: number;
   toolCallResults: number;
   workspaceName: string;
+}
+
+/** Per-model token + AIC totals from debug-log llm_request entries. */
+export interface DebugModelTotals {
+  prompt: number;
+  output: number;
+  cached: number;
+  calls: number;
+  /** Sum of copilotUsageNanoAiu for this model (divide by 1e9 for credits). */
+  nanoAiu: number;
 }
 
 export interface ToolCall {
@@ -886,6 +905,47 @@ interface DebugLogTurnTokens {
   lastRequestNanoAiu: number;
   /** Epoch ms timestamp of the last single llm_request in this turn. */
   lastRequestTs: number;
+  /**
+   * Per-model breakdown for this turn (parent + merged child sessions).
+   * Keyed by `attrs.model` from each `llm_request`. Surfaces auxiliary
+   * models (title gpt-4o-mini, subagent haiku, etc.) that the parent
+   * turn's single `modelFamily` would otherwise hide.
+   */
+  byModel: Map<string, DebugModelTotals>;
+}
+
+/** Initialise an empty DebugModelTotals row. */
+function emptyModelTotals(): DebugModelTotals {
+  return { prompt: 0, output: 0, cached: 0, calls: 0, nanoAiu: 0 };
+}
+
+/** Initialise an empty per-turn debug-log accumulator with timestamp. */
+function emptyDebugTurn(turnIndex: number, timestamp = 0): DebugLogTurnTokens {
+  return {
+    turnIndex,
+    promptTotal: 0,
+    outputTotal: 0,
+    cachedTotal: 0,
+    llmCalls: 0,
+    timestamp,
+    nanoAiu: 0,
+    lastRequestNanoAiu: 0,
+    lastRequestTs: 0,
+    byModel: new Map<string, DebugModelTotals>(),
+  };
+}
+
+/** Merge `src` into `dst` (in-place). Used for parent-turn ← child-session aggregation. */
+function mergeByModel(dst: Map<string, DebugModelTotals>, src: Map<string, DebugModelTotals>): void {
+  for (const [model, s] of src) {
+    const d = dst.get(model) ?? emptyModelTotals();
+    d.prompt += s.prompt;
+    d.output += s.output;
+    d.cached += s.cached;
+    d.calls += s.calls;
+    d.nanoAiu += s.nanoAiu;
+    dst.set(model, d);
+  }
 }
 
 interface DebugLogData {
@@ -912,6 +972,13 @@ interface ParsedDebugLog {
   turnMap: Map<number, DebugLogTurnTokens>;
   /** Maps child log filename → parent turnIndex that spawned it */
   childLogFiles: Map<string, number>;
+  /**
+   * Per-model breakdown summed across the entire file (every llm_request,
+   * whether or not it was inside a turn). Used to recover the AIC of
+   * `title-*.jsonl` and any other child file that emits llm_requests before
+   * `turn_start` fires — those would otherwise be invisible in `turnMap`.
+   */
+  byModel: Map<string, DebugModelTotals>;
 }
 
 function parseDebugLogLines(content: string): ParsedDebugLog | null {
@@ -928,6 +995,10 @@ function parseDebugLogLines(content: string): ParsedDebugLog | null {
   let totalLlmCalls = 0;
   let totalNanoAiu = 0;
   const childLogFiles = new Map<string, number>();
+  // Session-level per-model totals so pre-turn llm_requests (e.g. title
+  // generation, which fires before any turn_start) still contribute to
+  // per-model attribution.
+  const sessionByModel = new Map<string, DebugModelTotals>();
 
   for (const line of lines) {
     let entry: unknown;
@@ -954,17 +1025,7 @@ function parseDebugLogLines(content: string): ParsedDebugLog | null {
       currentTurn = Number.isNaN(parsed) ? currentTurn + 1 : parsed;
       if (!turnMap.has(currentTurn)) {
         const ts = typeof entry.ts === "number" ? entry.ts : 0;
-        turnMap.set(currentTurn, {
-          turnIndex: currentTurn,
-          promptTotal: 0,
-          outputTotal: 0,
-          cachedTotal: 0,
-          llmCalls: 0,
-          timestamp: ts,
-          nanoAiu: 0,
-          lastRequestNanoAiu: 0,
-          lastRequestTs: 0,
-        });
+        turnMap.set(currentTurn, emptyDebugTurn(currentTurn, ts));
       }
     } else if (type === "llm_request") {
       const attrs = entry.attrs;
@@ -979,6 +1040,12 @@ function parseDebugLogLines(content: string): ParsedDebugLog | null {
       // CACHE cells stop showing 0 when OTLP is unavailable.
       const cached = typeof attrs.cachedTokens === "number" ? attrs.cachedTokens : 0;
       const nanoAiu = typeof attrs.copilotUsageNanoAiu === "number" ? attrs.copilotUsageNanoAiu : 0;
+      // Per-event model: lets us attribute auxiliary calls (e.g. title
+      // generation using gpt-4o-mini, subagents using claude-haiku-4.5) to
+      // their actual model instead of collapsing them into the parent turn's
+      // single modelFamily. Falls back to "unknown" so per-model rows always
+      // have a bucket.
+      const reqModel = typeof attrs.model === "string" && attrs.model ? attrs.model : "unknown";
       // Per-event timestamp: prefer the llm_request's own `ts` (when the API
       // call returned), fall back to 0 so we don't regress the turn's existing
       // turn_start timestamp.
@@ -987,20 +1054,18 @@ function parseDebugLogLines(content: string): ParsedDebugLog | null {
       totalOutput += out;
       totalNanoAiu += nanoAiu;
       totalLlmCalls++;
+      // Session-level per-model accumulation (covers pre-turn requests too).
+      const sm = sessionByModel.get(reqModel) ?? emptyModelTotals();
+      sm.prompt += inp;
+      sm.output += out;
+      sm.cached += cached;
+      sm.calls += 1;
+      sm.nanoAiu += nanoAiu;
+      sessionByModel.set(reqModel, sm);
 
       if (currentTurn >= 0) {
         if (!turnMap.has(currentTurn)) {
-          turnMap.set(currentTurn, {
-            turnIndex: currentTurn,
-            promptTotal: 0,
-            outputTotal: 0,
-            cachedTotal: 0,
-            llmCalls: 0,
-            timestamp: 0,
-            nanoAiu: 0,
-            lastRequestNanoAiu: 0,
-            lastRequestTs: 0,
-          });
+          turnMap.set(currentTurn, emptyDebugTurn(currentTurn));
         }
         const t = turnMap.get(currentTurn)!;
         t.promptTotal += inp;
@@ -1008,6 +1073,15 @@ function parseDebugLogLines(content: string): ParsedDebugLog | null {
         t.cachedTotal += cached;
         t.nanoAiu += nanoAiu;
         t.llmCalls++;
+        // Accumulate per-model totals for this turn so the dashboard's
+        // per-model breakdown can show auxiliary models separately.
+        const m = t.byModel.get(reqModel) ?? emptyModelTotals();
+        m.prompt += inp;
+        m.output += out;
+        m.cached += cached;
+        m.calls += 1;
+        m.nanoAiu += nanoAiu;
+        t.byModel.set(reqModel, m);
         // Bump the turn's timestamp to the latest llm_request seen so the
         // dashboard's "most recent turn" picker reflects real last activity.
         if (eventTs > t.timestamp) {
@@ -1035,6 +1109,7 @@ function parseDebugLogLines(content: string): ParsedDebugLog | null {
     totalNanoAiu,
     turnMap,
     childLogFiles,
+    byModel: sessionByModel,
   };
 }
 
@@ -1062,6 +1137,30 @@ async function parseDebugLogDir(sessionDir: string): Promise<DebugLogData | null
   let totalLlmCalls = main.totalLlmCalls;
   let totalNanoAiu = main.totalNanoAiu;
 
+  // Older Copilot versions (and some session boundary conditions) leave
+  // `title-*.jsonl` and `runSubagent-*.jsonl` on disk WITHOUT a matching
+  // `child_session_ref` entry in main.jsonl. Audit against real
+  // workspaceStorage showed 16 such orphan files across 295 sessions,
+  // containing 137 llm_request events (mostly subagent haiku rounds + a
+  // few title gpt-4o-mini calls). Without this step those calls are
+  // silently dropped from all per-model and token totals.
+  //
+  // Enumerate disk-resident child files and attach any not already
+  // referenced as orphans (parentTurn = -1 → attributed to turn 0, the
+  // same fallback used for pre-turn title entries below).
+  try {
+    const dirEntries = await fsp.readdir(sessionDir);
+    for (const name of dirEntries) {
+      if (!name.endsWith(".jsonl")) continue;
+      if (!name.startsWith("title-") && !name.startsWith("runSubagent-")) continue;
+      if (!main.childLogFiles.has(name)) {
+        main.childLogFiles.set(name, -1);
+      }
+    }
+  } catch {
+    /* dir already known-readable (main.jsonl was read above); ignore */
+  }
+
   if (main.childLogFiles.size > 0) {
     const entries = Array.from(main.childLogFiles.entries());
     const childResults = await mapConcurrent(entries, 8, async ([childFile, parentTurn]) => {
@@ -1085,16 +1184,31 @@ async function parseDebugLogDir(sessionDir: string): Promise<DebugLogData | null
       totalLlmCalls += child.totalLlmCalls;
       totalNanoAiu += child.totalNanoAiu;
 
-      // Merge child credits into the parent turn that spawned it
-      if (parentTurn >= 0) {
-        const pt = main.turnMap.get(parentTurn);
-        if (pt) {
-          pt.promptTotal += child.totalPrompt;
-          pt.outputTotal += child.totalOutput;
-          pt.llmCalls += child.totalLlmCalls;
-          pt.nanoAiu += child.totalNanoAiu;
-        }
+      // Merge child credits into the parent turn that spawned it. The
+      // `title-*.jsonl` child fires BEFORE any `turn_start` (parentTurn === -1)
+      // because Copilot generates the conversation title at session-start,
+      // before the user's first turn. Treat that as turn 0 so the title call's
+      // small-model AIC (gpt-4o-mini) is attributed instead of orphaned.
+      const targetTurnIdx = parentTurn >= 0 ? parentTurn : 0;
+      let pt = main.turnMap.get(targetTurnIdx);
+      if (!pt) {
+        // No turn_start seen yet for the target turn — synthesize an empty
+        // one so the pre-turn child (title) has somewhere to attach. Will be
+        // populated by any subsequent turn_start / llm_request for the same id.
+        pt = emptyDebugTurn(targetTurnIdx);
+        main.turnMap.set(targetTurnIdx, pt);
       }
+      pt.promptTotal += child.totalPrompt;
+      pt.outputTotal += child.totalOutput;
+      pt.llmCalls += child.totalLlmCalls;
+      pt.nanoAiu += child.totalNanoAiu;
+      // Merge child's per-model breakdown so the parent turn surfaces
+      // auxiliary models (title gpt-4o-mini, subagent haiku) in the
+      // dashboard's per-model rows instead of hiding them under the
+      // parent's single modelFamily. Use the child's session-level byModel
+      // (covers pre-turn llm_requests like `title-*.jsonl`'s single call,
+      // which has no `turn_start` and therefore no per-turn bucket).
+      mergeByModel(pt.byModel, child.byModel);
     }
   }
 
@@ -1304,6 +1418,9 @@ export async function scanWorkspaceStorage(workspaceStorageOverride?: string): P
           t.debugLastRequestTs = dt.lastRequestTs
             ? new Date(dt.lastRequestTs).toISOString()
             : "";
+          if (dt.byModel.size > 0) {
+            t.debugByModel = Object.fromEntries(dt.byModel);
+          }
         }
       } else if (dt.promptTotal > 0 || dt.outputTotal > 0) {
         // chatSession hasn't flushed this turn yet — create synthetic turn from debug-log
@@ -1324,6 +1441,7 @@ export async function scanWorkspaceStorage(workspaceStorageOverride?: string): P
           debugLastRequestTs: dt.lastRequestTs
             ? new Date(dt.lastRequestTs).toISOString()
             : "",
+          debugByModel: dt.byModel.size > 0 ? Object.fromEntries(dt.byModel) : undefined,
           toolCallRounds: dt.llmCalls > 1 ? dt.llmCalls - 1 : 0,
           toolCallResults: 0,
           workspaceName: "",

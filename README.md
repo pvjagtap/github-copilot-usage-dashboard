@@ -60,10 +60,12 @@ The scanner auto-detects the VS Code `workspaceStorage` root across platforms (o
 Inside that root the extension reads:
 
 1. **chatSessions JSONL** at `{root}/{hash}/chatSessions/*.jsonl`
+   - Parsed by [src/scanner.ts](src/scanner.ts) `parseSessionContent`. Handles `kind=0` (current — session metadata + embedded `v.requests[]`), `kind=1` (legacy — `[customTitle]` / `[requests, N, result]`), and `kind=2` (latest prompt snapshot). All three must keep working.
+   - Tokens here are snapshots only — authoritative per-call data comes from debug-logs.
 2. **debug-logs** at `{root}/{hash}/GitHub.copilot-chat/debug-logs/{session}/`
-   - `main.jsonl` — per-turn LLM call data with actual token counts and `copilotUsageNanoAiu` (exact API billing)
-   - `runSubagent-*.jsonl` — subagent/child session LLM calls (aggregated into parent session totals)
-   - `title-*.jsonl` — title-generation calls
+   - `main.jsonl` — per-event stream (`session_start`, `turn_start`, `llm_request`, `child_session_ref`). Each `llm_request` carries `attrs.model`, `attrs.inputTokens`, `attrs.outputTokens`, `attrs.cachedTokens`, and `attrs.copilotUsageNanoAiu` (exact API billing × 1e9). **Per-event model attribution is required** so auxiliary calls (e.g. `gpt-4o-mini` for title generation, `claude-haiku-4.5` for subagents) appear in per-model rows instead of being collapsed into the parent turn's model.
+   - `runSubagent-*.jsonl` — subagent rounds. Credits are merged into the parent turn that spawned them (via `child_session_ref`).
+   - `title-*.jsonl` — title generation. Fires **before any `turn_start`**, so the parser attributes it to turn 0 to avoid losing its small-model credits.
 3. **transcripts** at `{root}/{hash}/GitHub.copilot-chat/transcripts/`
 4. **[Oh My Pi](https://github.com/can1357/oh-my-pi) (OMP) agent sessions** at `~/.omp/agent/sessions/**/*.jsonl` — scanned concurrently with mtime caching; contributes LLM calls, tokens, and AIC credits to the shared budget
 5. **[Pi](https://github.com/earendil-works/pi) coding-agent sessions** at `~/.pi/agent/sessions/**/*.jsonl` — same scanning model as OMP
@@ -72,6 +74,8 @@ Inside that root the extension reads:
 The scanner handles both legacy (`kind=1`) and current (`kind=0`) JSONL formats.
 All file I/O is fully async with concurrent reads (16-worker pool) and mtime caching.
 OMP/Pi token counts are reported as **all-time** historical; AIC credits for those sources are scoped to the current billing cycle (Jun 1+).
+
+> **Contributors:** [.agents/agents.md](.agents/agents.md) documents the JSONL parsing contract and invariants that must not regress. [tests/scan-june-workspace.ts](tests/scan-june-workspace.ts) is an independent audit script that re-implements `llm_request` parsing and must continue to print `Extension credit display matches API ground truth` (0.0% drift) after any parser change.
 
 ## Configuration
 

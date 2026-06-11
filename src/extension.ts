@@ -599,16 +599,28 @@ function updateStatusBar(): void {
     // attributes are missing for some Anthropic Opus traces, which makes the
     // calculator under- or over-report. Debug logs always carry the exact
     // billed value, so prefer it when it is at least as large.
+    //
+    // SCOPE: filter to turns that arrived AFTER this extension activated. The
+    // calendar-day filter alone matched every prior VS Code window's debug-log
+    // turns from today (debug-logs live in shared workspaceStorage), so the
+    // status bar's `AIC(sess)` would inherit thousands of credits from an
+    // earlier window while the dashboard's `AIC (sess)` — which already had
+    // the activationTime filter (v1.9.16) — correctly showed only this
+    // window's spend. Same root cause, same fix.
     if (lastScan && lastScan.turns.length > 0) {
-      const todayKey = new Date().toISOString().slice(0, 10);
-      const debugAicToday = lastScan.turns.reduce((sum, t) => {
-        if (t.timestamp && t.timestamp.slice(0, 10) === todayKey && t.debugAicCredits > 0) {
+      const debugAicSession = lastScan.turns.reduce((sum, t) => {
+        if (
+          t.timestamp &&
+          t.timestamp >= activationTime &&
+          t.timestamp.slice(0, 10) >= AIC_START &&
+          t.debugAicCredits > 0
+        ) {
           return sum + t.debugAicCredits;
         }
         return sum;
       }, 0);
-      if (debugAicToday > otelAIC) {
-        otelAIC = debugAicToday;
+      if (debugAicSession > otelAIC) {
+        otelAIC = debugAicSession;
       }
     }
 
@@ -680,6 +692,14 @@ function updateStatusBar(): void {
   // recent debug-log turn's exact AIC if it is at least as new. Debug-log
   // values come from `copilotUsageNanoAiu` (the API-billed credit count) and
   // are authoritative — OTel cache attributes are unreliable for some models.
+  //
+  // SCOPE: same activationTime filter as `currentSessionAIC` above. Without
+  // it, a prior VS Code window's turn whose `timestamp` happens to be newer
+  // than this window's last OTel request could leak its AIC into `Req:`.
+  // Also prefer the per-event `debugLastRequestTs` / `debugLastRequestAic`
+  // over the turn-start time / turn total — matches dashboard logic so a
+  // turn containing many tool-call llm_requests reports only the value of
+  // the truly latest single request, not the sum.
   let lastRequestAIC = 0;
   let lastRequestSourceTs = "";
   if (otel && otel.lastRequest) {
@@ -697,11 +717,19 @@ function updateStatusBar(): void {
   if (lastScan && lastScan.turns.length > 0) {
     let mostRecentDebug: { ts: string; aic: number } | undefined;
     for (const t of lastScan.turns) {
-      if (!t.timestamp || t.debugAicCredits <= 0) {
+      if (!t.timestamp || t.timestamp < activationTime) {
         continue;
       }
-      if (!mostRecentDebug || t.timestamp > mostRecentDebug.ts) {
-        mostRecentDebug = { ts: t.timestamp, aic: t.debugAicCredits };
+      if (t.timestamp.slice(0, 10) < AIC_START) {
+        continue;
+      }
+      const ts = t.debugLastRequestTs || t.timestamp;
+      const aic = t.debugLastRequestAic > 0 ? t.debugLastRequestAic : t.debugAicCredits;
+      if (aic <= 0) {
+        continue;
+      }
+      if (!mostRecentDebug || ts > mostRecentDebug.ts) {
+        mostRecentDebug = { ts, aic };
       }
     }
     if (mostRecentDebug && (mostRecentDebug.ts >= lastRequestSourceTs || lastRequestAIC === 0)) {

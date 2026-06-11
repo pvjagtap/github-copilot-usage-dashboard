@@ -160,6 +160,13 @@ function parseJsonl(filePath: string, sessionId: string): LlmCall[] {
   let content: string;
   try { content = fs.readFileSync(filePath, "utf-8"); } catch { return []; }
 
+  // Local helper kept independent of scanner.ts on purpose — this audit must
+  // not share parsing code with the thing it audits. Picks a numeric field
+  // off `attrs` with a 0 default. Using one helper here (instead of inline
+  // type-guards) also de-duplicates the per-field reads.
+  const pickNum = (attrs: any, key: string): number =>
+    typeof attrs[key] === "number" ? attrs[key] : 0;
+
   const lines = content.split("\n").filter(l => l.trim());
   for (const line of lines) {
     let entry: any;
@@ -169,10 +176,10 @@ function parseJsonl(filePath: string, sessionId: string): LlmCall[] {
     const attrs = entry.attrs;
     if (!attrs || typeof attrs !== "object") continue;
 
-    const inp = typeof attrs.inputTokens === "number" ? attrs.inputTokens : 0;
-    const out = typeof attrs.outputTokens === "number" ? attrs.outputTokens : 0;
-    const cached = typeof attrs.cachedTokens === "number" ? attrs.cachedTokens : 0;
-    const nanoAiu = typeof attrs.copilotUsageNanoAiu === "number" ? attrs.copilotUsageNanoAiu : 0;
+    const inp = pickNum(attrs, "inputTokens");
+    const out = pickNum(attrs, "outputTokens");
+    const cached = pickNum(attrs, "cachedTokens");
+    const nanoAiu = pickNum(attrs, "copilotUsageNanoAiu");
     const ts = typeof entry.ts === "number" ? new Date(entry.ts).toISOString() : "";
 
     if (inp === 0 && out === 0) continue; // skip empty calls

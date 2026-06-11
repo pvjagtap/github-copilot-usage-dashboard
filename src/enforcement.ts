@@ -56,7 +56,7 @@ export class Enforcement {
           "Resume Anyway",
           "Snooze 10 min"
         )
-        .then(async choice => {
+        .then(choice => {
           if (choice === "Open Shield") {
             void vscode.commands.executeCommand("copilotUsage.dailyLimit.showShield");
           } else if (choice === "Resume Anyway") {
