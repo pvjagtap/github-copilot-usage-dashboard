@@ -565,7 +565,8 @@ function renderOtel(live) {
   const debugNote = 'Streaming directly from the local debug-log (<code>main.jsonl</code>) — the same <code>copilotUsageNanoAiu</code> the API bills you for. The OTLP receiver port (14318) is held by another VS Code window, so live OTLP traces are routed there; this window watches the debug-log file for real-time updates instead. Values are <strong>exact</strong>, not estimated.';
   let rows = '';
   (live.byModel||[]).forEach(m => {
-    rows += '<tr><td><span class="model-tag '+mc(m.model)+'">'+esc(m.model)+'</span></td><td class="num">'+m.requests+'</td><td class="num">'+fmt(m.prompt)+'</td><td class="num">'+fmt(m.completion)+'</td><td class="num">'+fmt(m.traceCached)+'</td><td class="num">'+fmt(m.metricCached)+'</td><td class="num cached">'+fmt(m.cached)+'</td></tr>';
+    const aic = (m.aicCredits || 0);
+    rows += '<tr><td><span class="model-tag '+mc(m.model)+'">'+esc(m.model)+'</span></td><td class="num">'+m.requests+'</td><td class="num">'+fmt(m.prompt)+'</td><td class="num">'+fmt(m.completion)+'</td><td class="num">'+fmt(m.traceCached)+'</td><td class="num">'+fmt(m.metricCached)+'</td><td class="num cached">'+fmt(m.cached)+'</td><td class="num orange">'+aic.toFixed(1)+'</td></tr>';
   });
   el.innerHTML = '<div class="table-card"><div class="section-head"><div class="section-title">Live OpenTelemetry</div><div class="section-subtitle">'+esc(sourceLabel)+' • Last event '+esc(ls)+'</div></div>'
     +'<div class="note">'+(live.source === 'debug-log' ? debugNote : 'Live OTLP export. Cached tokens prefer cumulative metric deltas when available.')+'</div>'
@@ -574,7 +575,7 @@ function renderOtel(live) {
       .map((s,i)=>{const p=s.split(':');return '<div class="stat-card"><div class="label">'+p[0]+'</div><div class="value'+(i===3?' cached':i>=6?' orange':'')+'">'+p[1]+'</div><div class="sub">'+p[2]+'</div></div>';}).join('')
     +'</div>'
     +'<div class="section-title" style="margin-top:8px">Live OTel by Model</div>'
-    +'<table><thead><tr><th>Model</th><th class="num">Requests</th><th class="num">Prompt</th><th class="num">Output</th><th class="num">Trace Cache</th><th class="num">Metric Cache</th><th class="num">Effective Cache</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+    +'<table><thead><tr><th>Model</th><th class="num">Requests</th><th class="num">Prompt</th><th class="num">Output</th><th class="num">Trace Cache</th><th class="num">Metric Cache</th><th class="num">Effective Cache</th><th class="num">AIC</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
 }
 
 /**

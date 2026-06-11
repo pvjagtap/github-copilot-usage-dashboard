@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.18] - 2026-06-11
+
+### Added
+
+- **New `AIC` column in the "Live OTel by Model" table.** Each model row now shows its API-billed credits alongside Requests / Prompt / Output / Cache, so it's immediately obvious which model is driving spend in the current session without cross-referencing the AIC section below.
+  - **OTel branch** ([src/dashboardData.ts](src/dashboardData.ts) `buildDashboardData()`): a rate-table estimate is computed per row, then **overlaid with the exact per-llm_request `copilotUsageNanoAiu`** from today's debug-log per-model breakdown (`turn.debugByModel[*].nanoAiu`) when available. Overlay is scoped to today + `activationTime` — same scope `sessionAIC` uses since v1.9.16 — so prior VS Code windows' debug-log turns can't leak in. Model names are matched case-insensitively.
+  - **Debug-log fallback branch**: per-row credits are summed directly from `mt.nanoAiu / 1e9`; legacy turns without per-model AIU fall back to `calculator.calculateCredits()`. Rounding to 2 decimals happens only at finalize, so intermediate sums keep precision.
+  - **`sessionAIC` is now derived from the same per-row credits the user sees in the table**, instead of an independent rate-table sum — the displayed grand total always matches the column.
+  - **Renderer** ([src/dashboardPanel.ts](src/dashboardPanel.ts) `renderOtel()`): adds an `AIC` `<th>` and renders `m.aicCredits.toFixed(1)` in the existing `.orange` style, matching the other AIC columns in the dashboard.
+
 ## [1.9.17] - 2026-06-11
 
 ### Fixed

@@ -200,6 +200,14 @@ export interface LiveOtelData {
     traceCached: number;
     metricCached: number;
     cached: number;
+    /**
+     * Per-model AIC credits. Prefers API-exact `copilotUsageNanoAiu` from
+     * debug-logs when present (live OTel overlays today's per-model billed
+     * AIU onto its rate-table baseline; debug-log branch reads it directly).
+     * Falls back to a calculator estimate derived from this row's
+     * prompt/completion/cached tokens when no billed value is available.
+     */
+    aicCredits: number;
   }>;
   /** Session-cumulative AIC credits computed from live OTel data */
   sessionAIC: number;
@@ -366,20 +374,59 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
   // Live OTel
   let liveOtel: LiveOtelData;
   if (liveStats && liveStats.requests > 0) {
-    const byModel = Array.from(liveStats.byModel.values()).map(m => ({
-      model: m.model,
-      requests: m.requests,
-      prompt: m.prompt,
-      completion: m.completion,
-      traceCached: m.traceCached,
-      metricCached: m.metricCached,
-      cached: m.cached,
-    }));
-    // Compute session-cumulative AIC from live OTel
+    // Compute per-model AIC alongside the byModel projection so the dashboard
+    // shows a credits column next to each model. We use a two-pass approach
+    // for accuracy:
+    //   1. Baseline estimate from rates (in case debug-logs lag OTel).
+    //   2. OVERLAY exact `copilotUsageNanoAiu` from today's debug-log per-
+    //      model breakdown when available (scoped to activationTime, same as
+    //      sessionAIC). This makes per-model credits API-exact instead of
+    //      estimated for every model the user actually billed today.
+    const todayDate = new Date().toISOString().slice(0, 10);
+    const exactByModelAiu = new Map<string, number>();
+    for (const t of scan.turns) {
+      if (!t.timestamp || t.timestamp.slice(0, 10) !== todayDate) {
+        continue;
+      }
+      if (activationTime && t.timestamp < activationTime) {
+        continue;
+      }
+      if (!t.debugByModel) {
+        continue;
+      }
+      for (const [model, mt] of Object.entries(t.debugByModel)) {
+        if (typeof mt.nanoAiu !== "number" || mt.nanoAiu <= 0) {
+          continue;
+        }
+        const key = model.toLowerCase();
+        exactByModelAiu.set(key, (exactByModelAiu.get(key) ?? 0) + mt.nanoAiu);
+      }
+    }
+
+    const byModel = Array.from(liveStats.byModel.values()).map(m => {
+      const exactNano = exactByModelAiu.get(m.model.toLowerCase());
+      const estimate = calculator.calculateCredits(m.model, m.prompt, m.completion, m.cached, m.cacheWrite).totalCredits;
+      // Prefer API-exact when this model has any billed AIU today; otherwise
+      // keep the rate-table estimate so newly-seen models still show a value.
+      const credits = typeof exactNano === "number" && exactNano > 0 ? exactNano / 1e9 : estimate;
+      return {
+        model: m.model,
+        requests: m.requests,
+        prompt: m.prompt,
+        completion: m.completion,
+        traceCached: m.traceCached,
+        metricCached: m.metricCached,
+        cached: m.cached,
+        aicCredits: Math.round(credits * 100) / 100,
+      };
+    });
+    // Compute session-cumulative AIC from live OTel (sum of per-model credits).
+    // When the debug-log overlay landed on every row this is API-exact; when
+    // some models fell back to rate estimates it's a hybrid -- the explicit
+    // debug-log overlay below still has a chance to tighten the final number.
     let sessionAIC = 0;
-    for (const m of liveStats.byModel.values()) {
-      const usage = calculator.calculateCredits(m.model, m.prompt, m.completion, m.cached, m.cacheWrite);
-      sessionAIC += usage.totalCredits;
+    for (const row of byModel) {
+      sessionAIC += row.aicCredits;
     }
     // Compute last request AIC from OTel data
     let lastRequestAIC = 0;
@@ -401,7 +448,6 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
     // main.jsonl (the calendar-day filter alone matched all of today's
     // sessions across reloads), so `AIC (sess)` showed thousands of credits
     // while `AIC (last req)` correctly showed the single new request.
-    const todayDate = new Date().toISOString().slice(0, 10);
     const debugTurnsToday = scan.turns.filter(
       t =>
         t.timestamp &&
@@ -463,11 +509,36 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
     );
 
     if (debugTurnsToday.length > 0) {
-      const byModelMap = new Map<string, { model: string; requests: number; prompt: number; completion: number; traceCached: number; metricCached: number; cached: number }>();
+      // Per-model accumulator. `aicCredits` is summed from the per-llm_request
+      // billed value (`debugByModel[*].credits` from copilotUsageNanoAiu) when
+      // available; otherwise falls back to a calculator estimate at finalize
+      // time. Either way it shows credits-per-model in the dashboard table.
+      const byModelMap = new Map<
+        string,
+        {
+          model: string;
+          requests: number;
+          prompt: number;
+          completion: number;
+          traceCached: number;
+          metricCached: number;
+          cached: number;
+          aicCredits: number;
+        }
+      >();
       const getOrCreateRow = (model: string) => {
         let row = byModelMap.get(model);
         if (!row) {
-          row = { model, requests: 0, prompt: 0, completion: 0, traceCached: 0, metricCached: 0, cached: 0 };
+          row = {
+            model,
+            requests: 0,
+            prompt: 0,
+            completion: 0,
+            traceCached: 0,
+            metricCached: 0,
+            cached: 0,
+            aicCredits: 0,
+          };
           byModelMap.set(model, row);
         }
         return row;
@@ -503,6 +574,16 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
             row.completion += mt.output;
             row.traceCached += mt.cached;
             row.cached += mt.cached;
+            // Prefer per-llm_request billed credits when the scanner captured
+            // them (nanoAiu is the raw `copilotUsageNanoAiu` * 1e0; divide by
+            // 1e9 to get credits). Falls back to a rate-table estimate when
+            // older debug-logs lack per-model AIU.
+            if (typeof mt.nanoAiu === "number" && mt.nanoAiu > 0) {
+              row.aicCredits += mt.nanoAiu / 1e9;
+            } else {
+              const usage = calculator.calculateCredits(model, mt.prompt, mt.output, mt.cached);
+              row.aicCredits += usage.totalCredits;
+            }
           }
         } else {
           const row = getOrCreateRow(turn.modelFamily || "unknown");
@@ -513,6 +594,17 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
           // matches the OTel column layout (Trace Cache / Metric Cache / Effective).
           row.traceCached += turnCached;
           row.cached += turnCached;
+          if (turn.debugAicCredits > 0) {
+            row.aicCredits += turn.debugAicCredits;
+          } else {
+            const usage = calculator.calculateCredits(
+              turn.modelFamily || "unknown",
+              turn.debugPromptTokens,
+              turn.debugOutputTokens,
+              turnCached
+            );
+            row.aicCredits += usage.totalCredits;
+          }
         }
         if (turn.timestamp > lastSeen) {
           lastSeen = turn.timestamp;
@@ -569,7 +661,10 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
         metricCached: 0,
         lastSeen,
         source: "debug-log",
-        byModel: Array.from(byModelMap.values()),
+        byModel: Array.from(byModelMap.values()).map(row => ({
+          ...row,
+          aicCredits: Math.round(row.aicCredits * 100) / 100,
+        })),
         sessionAIC: Math.round(sessionAIC * 100) / 100,
         lastRequestAIC: Math.round(lastRequestAIC * 100) / 100,
       };
