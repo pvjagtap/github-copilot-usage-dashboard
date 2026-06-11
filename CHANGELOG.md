@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.11] - 2026-06-10
+
+### Fixed
+
+- **AIC (last req) now reflects the turn with the most recent `llm_request`, not the most recent `turn_start`.** In the debug-log fallback, a long-running turn that fired many `llm_request` calls had an older `turn_start` timestamp than a freshly-started short turn — so the "most recent turn" picker would prefer the wrong one and show a stale AIC value (e.g. the dashboard displayed `8.4` while the actual just-finished request was `9.26`). The scanner now bumps `DebugLogTurnTokens.timestamp` to each `llm_request`'s own `ts` as they arrive, so "most recent" reflects real last activity.
+- **Fallback note now explains why OTLP is unavailable.** Previous wording said "OTLP export is unavailable" which sounded like Copilot wasn't exporting at all. The real cause is that only one VS Code window's extension instance can bind port 14318 — others fall back to debug-log parsing. Note now says so.
+- **Fallback request-count label renamed to `LLM Requests`.** In fallback mode the receiver isn't running, so labelling the debug-log `llm_request` count as `OTel Requests` was confusing.
+
+### Refactored
+
+- No behavior change. Cross-validation (`tests/scan-june-workspace.ts`) still shows 0.0% drift vs API ground truth across all sessions, including the now-correct most-recent-turn pick.
+
 ## [1.9.10] - 2026-06-10
 
 ### Fixed

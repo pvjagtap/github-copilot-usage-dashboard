@@ -561,14 +561,16 @@ function renderOtel(live) {
   const ls = live.lastSeen ? new Date(live.lastSeen).toLocaleString('en-CA', {hour12: false}).replace(',','') : '';
   const csub = live.metricCached ? 'using metric deltas' : 'trace fallback only';
   const sourceLabel = live.source === 'debug-log' ? 'Local debug-log fallback' : 'Live OTLP receiver';
+  const reqLabel = live.source === 'debug-log' ? 'LLM Requests' : 'OTel Requests';
+  const fallbackNote = 'Using local debug-log activity because the OTLP receiver port is owned by another VS Code window (only one extension instance can bind port 14318 at a time). Values are sourced from debug-log llm_request entries with API-exact copilotUsageNanoAiu — accurate but updates only after each request flushes to disk.';
   let rows = '';
   (live.byModel||[]).forEach(m => {
     rows += '<tr><td><span class="model-tag '+mc(m.model)+'">'+esc(m.model)+'</span></td><td class="num">'+m.requests+'</td><td class="num">'+fmt(m.prompt)+'</td><td class="num">'+fmt(m.completion)+'</td><td class="num">'+fmt(m.traceCached)+'</td><td class="num">'+fmt(m.metricCached)+'</td><td class="num cached">'+fmt(m.cached)+'</td></tr>';
   });
   el.innerHTML = '<div class="table-card"><div class="section-head"><div class="section-title">Live OpenTelemetry</div><div class="section-subtitle">'+esc(sourceLabel)+' • Last event '+esc(ls)+'</div></div>'
-    +'<div class="note">'+(live.source === 'debug-log' ? 'Using local debug-log activity because OTLP export is unavailable. Cache-read tokens are sourced from debug-log llm_request entries; metric-cache deltas are unavailable in this fallback.' : 'Live OTLP export. Cached tokens prefer cumulative metric deltas when available.')+'</div>'
+    +'<div class="note">'+(live.source === 'debug-log' ? fallbackNote : 'Live OTLP export. Cached tokens prefer cumulative metric deltas when available.')+'</div>'
     +'<div class="stats-row">'
-    +['OTel Requests:'+live.requests+':last event '+esc(ls),'Live Prompt:'+fmt(live.prompt)+':from traces','Live Output:'+fmt(live.completion)+':from traces','Live Cached:'+fmt(live.cached)+':'+csub,'Trace Cache:'+fmt(live.traceCached)+':cache_read','Metric Cache:'+fmt(live.metricCached)+':token.usage','AIC (sess):'+((live.sessionAIC||0).toFixed(1))+':session total','AIC (last req):'+ ((live.lastRequestAIC||0).toFixed(1))+':last request']
+    +[reqLabel+':'+live.requests+':last event '+esc(ls),'Live Prompt:'+fmt(live.prompt)+':from traces','Live Output:'+fmt(live.completion)+':from traces','Live Cached:'+fmt(live.cached)+':'+csub,'Trace Cache:'+fmt(live.traceCached)+':cache_read','Metric Cache:'+fmt(live.metricCached)+':token.usage','AIC (sess):'+((live.sessionAIC||0).toFixed(1))+':session total','AIC (last req):'+ ((live.lastRequestAIC||0).toFixed(1))+':last request']
       .map((s,i)=>{const p=s.split(':');return '<div class="stat-card"><div class="label">'+p[0]+'</div><div class="value'+(i===3?' cached':i>=6?' orange':'')+'">'+p[1]+'</div><div class="sub">'+p[2]+'</div></div>';}).join('')
     +'</div>'
     +'<div class="section-title" style="margin-top:8px">Live OTel by Model</div>'

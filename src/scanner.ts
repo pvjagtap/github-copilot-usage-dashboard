@@ -734,7 +734,13 @@ interface DebugLogTurnTokens {
   /** Sum of cache-read tokens for all LLM calls in this turn (attrs.cachedTokens). */
   cachedTotal: number;
   llmCalls: number;
-  /** Epoch ms timestamp from turn_start event */
+  /**
+   * Epoch ms timestamp of last activity for this turn. Initialized from
+   * turn_start, then bumped on every llm_request so the dashboard's
+   * "most recent turn" picker reflects actual last activity instead of
+   * when the turn began. Long-running turns with many llm_request calls
+   * otherwise looked older than freshly-started short turns.
+   */
   timestamp: number;
   /** Sum of copilotUsageNanoAiu for all LLM calls in this turn */
   nanoAiu: number;
@@ -809,6 +815,10 @@ function parseDebugLogLines(content: string): ParsedDebugLog | null {
       // CACHE cells stop showing 0 when OTLP is unavailable.
       const cached = typeof attrs.cachedTokens === "number" ? attrs.cachedTokens : 0;
       const nanoAiu = typeof attrs.copilotUsageNanoAiu === "number" ? attrs.copilotUsageNanoAiu : 0;
+      // Per-event timestamp: prefer the llm_request's own `ts` (when the API
+      // call returned), fall back to 0 so we don't regress the turn's existing
+      // turn_start timestamp.
+      const eventTs = typeof entry.ts === "number" ? entry.ts : 0;
       totalPrompt += inp;
       totalOutput += out;
       totalNanoAiu += nanoAiu;
@@ -824,6 +834,9 @@ function parseDebugLogLines(content: string): ParsedDebugLog | null {
         t.cachedTotal += cached;
         t.nanoAiu += nanoAiu;
         t.llmCalls++;
+        // Bump the turn's timestamp to the latest llm_request seen so the
+        // dashboard's "most recent turn" picker reflects real last activity.
+        if (eventTs > t.timestamp) { t.timestamp = eventTs; }
       }
     }
   }
