@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.16] - 2026-06-10
+
+### Fixed
+
+- **`AIC (sess)` no longer inherits prior sessions' totals on a fresh VS Code window.** The debug-log overlay that backstops the OTel `sessionAIC` was filtering by calendar day only — so opening a brand-new VS Code window mid-day picked up every turn from every prior reload/session in `main.jsonl` and `Math.max`'d that into `AIC (sess)`. The dashboard would then show e.g. `AIC (LAST REQ) 7.2` (correct — just this session's one request) next to `AIC (SESS) 6174.5` (wrong — all of today's prior sessions). `buildDashboardData` now takes `activationTime` and the debug-log overlay scopes turns to `t.timestamp >= activationTime` on both the OTel-present and OTel-absent paths. Same activation-scoping the status-bar `AIC(cur)` has used since v1.8.x.
+
 ## [1.9.15] - 2026-06-10
 
 ### Fixed

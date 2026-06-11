@@ -337,7 +337,7 @@ function computeAllModels(turns: Turn[]): string[] {
 
 // ─── Build Dashboard Data ─────────────────────────────────────
 
-export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null, aicConfig?: AICConfig, agentScan?: AgentScanResult): DashboardData {
+export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null, aicConfig?: AICConfig, agentScan?: AgentScanResult, activationTime?: string): DashboardData {
   // Create AIC calculator early so it can be used in session views
   const config = aicConfig ?? DEFAULT_AIC_CONFIG;
   const calculator = createCalculatorFromConfig(config);
@@ -380,9 +380,19 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
     // causes the calculator to produce under- or over-estimates. Debug logs
     // capture `copilotUsageNanoAiu` directly from the API response, which is
     // the exact billed value. When available, prefer it.
+    //
+    // Scope to THIS VS Code session via `activationTime`. Without it, opening
+    // a fresh window mid-day inherited every prior session's AIC from
+    // main.jsonl (the calendar-day filter alone matched all of today's
+    // sessions across reloads), so `AIC (sess)` showed thousands of credits
+    // while `AIC (last req)` correctly showed the single new request.
     const todayDate = new Date().toISOString().slice(0, 10);
     const debugTurnsToday = scan.turns.filter(
-      t => t.timestamp && t.timestamp.slice(0, 10) === todayDate && t.debugAicCredits > 0
+      t =>
+        t.timestamp &&
+        t.timestamp.slice(0, 10) === todayDate &&
+        t.debugAicCredits > 0 &&
+        (!activationTime || t.timestamp >= activationTime)
     );
     if (debugTurnsToday.length > 0) {
       // sessionAIC: take the larger of (OTel-derived, debug-log today sum) to
@@ -425,8 +435,17 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
       lastRequestAIC: Math.round(lastRequestAIC * 100) / 100,
     };
   } else {
+    // Debug-log-only fallback (no OTel data yet). Same activationTime scope
+    // as the OTel branch — otherwise a fresh VS Code session would inherit
+    // every prior session's AIC from today's main.jsonl.
     const today = new Date().toISOString().slice(0, 10);
-    const debugTurnsToday = scan.turns.filter(t => t.timestamp && t.timestamp.slice(0, 10) === today && (t.debugPromptTokens > 0 || t.debugOutputTokens > 0));
+    const debugTurnsToday = scan.turns.filter(
+      t =>
+        t.timestamp &&
+        t.timestamp.slice(0, 10) === today &&
+        (t.debugPromptTokens > 0 || t.debugOutputTokens > 0) &&
+        (!activationTime || t.timestamp >= activationTime)
+    );
 
     if (debugTurnsToday.length > 0) {
       const byModelMap = new Map<string, { model: string; requests: number; prompt: number; completion: number; traceCached: number; metricCached: number; cached: number }>();

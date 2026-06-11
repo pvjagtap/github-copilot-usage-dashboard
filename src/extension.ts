@@ -106,7 +106,7 @@ function buildData(): DashboardData {
     },
   };
   const aicConfig = getAICConfig();
-  cachedDashData = buildDashboardData(scan, otelStats, aicConfig, lastAgentScan);
+  cachedDashData = buildDashboardData(scan, otelStats, aicConfig, lastAgentScan, activationTime);
   const elapsed = Date.now() - t0;
   if (elapsed > 200) {
     output.appendLine(
