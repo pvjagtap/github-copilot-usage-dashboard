@@ -169,6 +169,64 @@ function extractSubagentArgs(rawArgs: unknown): { agentName: string; description
   return { agentName, description };
 }
 
+/**
+ * Common emit path for both the kind=0 (v.requests[]) and kind=1 (...result)
+ * parse branches. Given a turn-result `meta` blob, pushes one Turn plus all
+ * its tool-call / subagent rows.
+ *
+ * Caller is responsible for resolving turnIndex, timestamp and workspaceName
+ * because each branch derives them from different fields.
+ */
+function emitTurnAndToolCalls(
+  meta: Record<string, unknown>,
+  ctx: {
+    sessionId: string;
+    turnIndex: number;
+    modelFamily: string;
+    timestamp: string;
+    workspaceName: string;
+  },
+  out: { turns: Turn[]; toolCalls: ToolCall[]; subagents: Subagent[] },
+): void {
+  const { sessionId, turnIndex, modelFamily, timestamp, workspaceName } = ctx;
+
+  out.turns.push({
+    sessionId,
+    turnIndex,
+    timestamp,
+    modelFamily,
+    promptTokens: num(meta, "promptTokens"),
+    outputTokens: num(meta, "outputTokens"),
+    debugPromptTokens: 0,
+    debugOutputTokens: 0,
+    debugLlmCalls: 0,
+    debugAicCredits: 0,
+    toolCallRounds: isArr(meta.toolCallRounds) ? meta.toolCallRounds.length : 0,
+    toolCallResults: isArr(meta.toolCallResults) ? meta.toolCallResults.length : 0,
+    workspaceName,
+  });
+
+  let callIndex = 0;
+  if (isArr(meta.toolCallRounds)) {
+    for (const round of meta.toolCallRounds) {
+      if (!isObj(round)) { continue; }
+      const roundCalls = round.toolCalls;
+      if (!isArr(roundCalls)) { continue; }
+      for (const tc of roundCalls) {
+        if (!isObj(tc)) { continue; }
+        const toolName = typeof tc.name === "string" ? tc.name : "unknown";
+        const isSub = toolName === "runSubagent";
+        out.toolCalls.push({ sessionId, turnIndex, callIndex, toolName, isSubagent: isSub });
+        if (isSub) {
+          const { agentName, description } = extractSubagentArgs(tc.arguments);
+          out.subagents.push({ sessionId, turnIndex, callIndex, agentName, description });
+        }
+        callIndex++;
+      }
+    }
+  }
+}
+
 // ─── Helpers ──────────────────────────────────────────────────
 
 function epochMsToIso(ms: number): string {
@@ -293,42 +351,11 @@ function parseSessionContent(content: string, filePath: string, wsHash: string, 
             const reqAgent = get(req, "agent", "id");
             if (typeof reqAgent === "string") { agentId = reqAgent; }
 
-            turns.push({
-              sessionId,
-              turnIndex: ri,
-              timestamp,
-              modelFamily,
-              promptTokens: num(meta, "promptTokens"),
-              outputTokens: num(meta, "outputTokens"),
-              debugPromptTokens: 0,
-              debugOutputTokens: 0,
-              debugLlmCalls: 0,
-              debugAicCredits: 0,
-              toolCallRounds: isArr(meta.toolCallRounds) ? meta.toolCallRounds.length : 0,
-              toolCallResults: isArr(meta.toolCallResults) ? meta.toolCallResults.length : 0,
-              workspaceName: wName,
-            });
-
-            // Extract tool calls from embedded requests
-            let callIndex = 0;
-            if (isArr(meta.toolCallRounds)) {
-              for (const round of meta.toolCallRounds) {
-                if (!isObj(round)) { continue; }
-                const roundCalls = round.toolCalls;
-                if (!isArr(roundCalls)) { continue; }
-                for (const tc of roundCalls) {
-                  if (!isObj(tc)) { continue; }
-                  const toolName = typeof tc.name === "string" ? tc.name : "unknown";
-                  const isSub = toolName === "runSubagent";
-                  toolCalls.push({ sessionId, turnIndex: ri, callIndex, toolName, isSubagent: isSub });
-                  if (isSub) {
-                    const { agentName: aName, description: desc } = extractSubagentArgs(tc.arguments);
-                    subagents.push({ sessionId, turnIndex: ri, callIndex, agentName: aName, description: desc });
-                  }
-                  callIndex++;
-                }
-              }
-            }
+            emitTurnAndToolCalls(
+              meta,
+              { sessionId, turnIndex: ri, modelFamily, timestamp, workspaceName: wName },
+              { turns, toolCalls, subagents },
+            );
           } else {
             // No result metadata yet — still count as a turn if there's a timestamp
             const reqTs = num(req as Record<string, unknown>, "timestamp");
@@ -391,43 +418,11 @@ function parseSessionContent(content: string, filePath: string, wsHash: string, 
         typeof meta.cacheKey === "string" ? meta.cacheKey : undefined, wsHash);
       if (typeof meta.agentId === "string") { agentId = meta.agentId; }
 
-      turns.push({
-        sessionId,
-        turnIndex,
-        timestamp,
-        modelFamily,
-        promptTokens: num(meta, "promptTokens"),
-        outputTokens: num(meta, "outputTokens"),
-        debugPromptTokens: 0,
-        debugOutputTokens: 0,
-        debugLlmCalls: 0,
-        debugAicCredits: 0,
-        toolCallRounds: isArr(meta.toolCallRounds) ? meta.toolCallRounds.length : 0,
-        toolCallResults: isArr(meta.toolCallResults) ? meta.toolCallResults.length : 0,
-        workspaceName: wName,
-      });
-
-      // Tool calls
-      let callIndex = 0;
-      if (isArr(meta.toolCallRounds)) {
-        for (const round of meta.toolCallRounds) {
-          if (!isObj(round)) { continue; }
-          const roundCalls = round.toolCalls;
-          if (!isArr(roundCalls)) { continue; }
-          for (const tc of roundCalls) {
-            if (!isObj(tc)) { continue; }
-            const toolName = typeof tc.name === "string" ? tc.name : "unknown";
-            const isSub = toolName === "runSubagent";
-            toolCalls.push({ sessionId, turnIndex, callIndex, toolName, isSubagent: isSub });
-
-            if (isSub) {
-              const { agentName, description: desc } = extractSubagentArgs(tc.arguments);
-              subagents.push({ sessionId, turnIndex, callIndex, agentName, description: desc });
-            }
-            callIndex++;
-          }
-        }
-      }
+      emitTurnAndToolCalls(
+        meta,
+        { sessionId, turnIndex, modelFamily, timestamp, workspaceName: wName },
+        { turns, toolCalls, subagents },
+      );
       continue;
     }
 
@@ -646,6 +641,17 @@ async function readDirNames(p: string): Promise<string[]> {
   try { return await fsp.readdir(p); } catch { return []; }
 }
 
+/**
+ * List the immediate subdirectories of `wsRoot`, sorted by name.
+ * Non-directory entries are filtered out; missing/inaccessible roots yield [].
+ */
+async function listWorkspaceDirsSorted(wsRoot: string): Promise<fs.Dirent[]> {
+  const entries = await readDirSafe(wsRoot);
+  return entries
+    .filter(e => e.isDirectory())
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 /** Process a single workspace directory for session files. */
 async function processWorkspaceDirForSessions(
   wsRoot: string,
@@ -683,10 +689,7 @@ async function processWorkspaceDirForSessions(
 
 /** Discover all session JSONL files across workspaceStorage. */
 async function discoverSessionFiles(wsRoot: string): Promise<FileEntry[]> {
-  const entries = await readDirSafe(wsRoot);
-  const dirs = entries
-    .filter(e => e.isDirectory())
-    .sort((a, b) => a.name.localeCompare(b.name));
+  const dirs = await listWorkspaceDirsSorted(wsRoot);
 
   const results = await mapConcurrent(dirs, 16, async (entry) => {
     return processWorkspaceDirForSessions(wsRoot, entry.name);
@@ -698,10 +701,7 @@ async function discoverSessionFiles(wsRoot: string): Promise<FileEntry[]> {
 /** Discover all transcript JSONL files. */
 async function discoverTranscriptFiles(wsRoot: string): Promise<Map<string, string[]>> {
   const map = new Map<string, string[]>();
-  const entries = await readDirSafe(wsRoot);
-  const dirs = entries
-    .filter(e => e.isDirectory())
-    .sort((a, b) => a.name.localeCompare(b.name));
+  const dirs = await listWorkspaceDirsSorted(wsRoot);
 
   await mapConcurrent(dirs, 16, async (entry) => {
     const tDir = path.join(wsRoot, entry.name, "GitHub.copilot-chat", "transcripts");
@@ -885,10 +885,7 @@ async function parseDebugLogDir(sessionDir: string): Promise<DebugLogData | null
 /** Discover debug-logs with mtime caching. Follows child_session_ref for full aggregation. */
 async function discoverDebugLogsCached(wsRoot: string): Promise<Map<string, DebugLogData>> {
   const map = new Map<string, DebugLogData>();
-  const entries = await readDirSafe(wsRoot);
-  const dirs = entries
-    .filter(e => e.isDirectory())
-    .sort((a, b) => a.name.localeCompare(b.name));
+  const dirs = await listWorkspaceDirsSorted(wsRoot);
 
   await mapConcurrent(dirs, 16, async (entry) => {
     const dlDir = path.join(wsRoot, entry.name, "GitHub.copilot-chat", "debug-logs");

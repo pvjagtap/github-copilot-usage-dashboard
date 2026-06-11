@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.8] - 2026-06-10
+
+### Changed
+
+- **Internal refactor only — no behavior change.** Eliminated 9 code-duplication clusters flagged by the Fallow static analyzer across `scanner.ts`, `agentScanner.ts`, `otelReceiver.ts`, `extension.ts` and `planDetector.ts`.
+  - New `src/util.ts` module exports `isObj`, `isArr`, `utcNow`, and `mapConcurrent`. Local copies in three files now import from it.
+  - `scanner.ts` gained four private helpers: `normalizeFileUri` (collapses two file:// URI decoders), `extractSubagentArgs` (collapses two runSubagent argument parsers), `emitTurnAndToolCalls` (collapses the 25-line turn + tool-call emission block used by both the `kind=0 v.requests[]` and `kind=1 ...result` parse paths), and `listWorkspaceDirsSorted` (collapses the 8-line workspaceStorage subdirectory listing used by `discoverSessionFiles`, `discoverTranscriptFiles`, and `discoverDebugLogsCached`).
+  - `extension.ts` gained `summarizeSnapshot` (collapses two identical `DailyLimitSnapshot` projection objects).
+  - `planDetector.ts` gained `persistDetectedPlan` and `runQuickPickAndPersist` (collapse the persist + manual-picker blocks shared by the silent and consent detection paths).
+- Verified by `tsc` (clean), `eslint src` (only pre-existing warnings), and the existing `tests/scan-june-workspace.ts` cross-validation script.
+
 ## [1.9.7] - 2026-06-10
 
 ### Fixed
