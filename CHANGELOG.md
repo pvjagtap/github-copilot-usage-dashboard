@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.14] - 2026-06-10
+
+### Fixed
+
+- **Extension activation no longer blocks on the initial scan.** Previously `activate()` did `await runScan()`, which on a large `workspaceStorage` (hundreds of debug-log sessions) could keep VS Code in the "activating" state for several seconds and delay every extension that depends on us. The first scan now runs fire-and-forget; the status bar and dashboard refresh as soon as it completes, and the `fs.watch` + 30 s safety-net timer take over for live updates.
+- **`deactivate()` now cleans up the v1.9.13 cooldown timer and the recursive `fs.watch` handle.** Previously these could outlive the extension host on reload and leak a watcher per reload cycle.
+
 ## [1.9.13] - 2026-06-10
 
 ### Fixed

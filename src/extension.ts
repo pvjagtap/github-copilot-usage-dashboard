@@ -159,8 +159,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // never block activation on a network call.
   void detectAndApplyPlan(context, m => output.appendLine(m));
 
-  // Initial scan of chatSession files
-  await runScan();
+  // Initial scan of chatSession files — fire-and-forget so we never block
+  // activate(). The dashboard/statusBar render empty state until the first
+  // scan finishes; the file watcher then takes over for live updates.
+  void runScan().then(() => {
+    updateStatusBar();
+    DashboardPanel.updateIfVisible(buildData());
+  });
 
   // Start OTel receiver
   receiver = new OTelReceiver();
@@ -795,6 +800,18 @@ export function deactivate(): void {
   }
   if (otelDebounceTimer) {
     clearTimeout(otelDebounceTimer);
+  }
+  if (debugLogCooldownTimer) {
+    clearTimeout(debugLogCooldownTimer);
+    debugLogCooldownTimer = undefined;
+  }
+  if (debugLogWatcher) {
+    try {
+      debugLogWatcher.close();
+    } catch {
+      /* ignore */
+    }
+    debugLogWatcher = undefined;
   }
   receiver?.stop();
   statusBar?.dispose();
