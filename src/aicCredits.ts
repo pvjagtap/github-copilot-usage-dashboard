@@ -413,15 +413,43 @@ export class AICCalculator {
     for (const entry of entries) {
       let usage: CreditUsage;
       if (entry.actualCredits !== undefined && entry.actualCredits > 0) {
-        // Use API-reported actual credits (includes cache discounts)
-        usage = {
-          inputCredits: entry.actualCredits, // attribute all to "input" for simplicity
-          outputCredits: 0,
-          cachedCredits: 0,
-          totalCredits: entry.actualCredits,
-          model: entry.model,
-          tier: this.findModelRate(entry.model)?.tier ?? "premium",
-        };
+        // API-reported actual credits (includes cache discounts) — authoritative total.
+        // To preserve a meaningful input/output/cached breakdown for the
+        // "AI Credits by Model" table, derive the rate-based split from the
+        // entry's tokens and scale each component so the three sum to the
+        // exact API-billed total. Without this, the table previously
+        // attributed 100% of credits to the Input column and showed
+        // Output=0 / Cached=0 for every model whose debug logs carried
+        // `copilotUsageNanoAiu` (i.e. essentially every post-June-1 turn).
+        const rate = this.findModelRate(entry.model);
+        const estimate = rate
+          ? this._compute(rate, entry.inputTokens, entry.outputTokens, entry.cachedTokens, 0)
+          : null;
+        const estTotal = estimate
+          ? estimate.inputCredits + estimate.outputCredits + estimate.cachedCredits
+          : 0;
+        if (estimate && estTotal > 0) {
+          const scale = entry.actualCredits / estTotal;
+          usage = {
+            inputCredits: estimate.inputCredits * scale,
+            outputCredits: estimate.outputCredits * scale,
+            cachedCredits: estimate.cachedCredits * scale,
+            totalCredits: entry.actualCredits,
+            model: entry.model,
+            tier: rate?.tier ?? "premium",
+          };
+        } else {
+          // No rate match or zero token counts (e.g. OMP/Pi agent entries
+          // that don't supply per-bucket tokens) — fall back to all-input.
+          usage = {
+            inputCredits: entry.actualCredits,
+            outputCredits: 0,
+            cachedCredits: 0,
+            totalCredits: entry.actualCredits,
+            model: entry.model,
+            tier: rate?.tier ?? "premium",
+          };
+        }
       } else {
         usage = this.calculateCredits(
           entry.model,

@@ -119,16 +119,29 @@ h1 { font-size: 22px; margin-bottom: 4px; display: flex; align-items: center; ga
 .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
 .filter-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
 .filter-bar label { font-size: 12px; color: var(--fg); cursor: pointer; }
-.filter-bar input[type="checkbox"] { margin-right: 3px; }
-.btn-sm { font-size: 11px; padding: 2px 8px; background: var(--card); color: var(--blue); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
+.filter-group { display: inline-flex; align-items: center; gap: 6px; }
+.filter-label { font-size: 10px; color: var(--muted); text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; }
+.filter-select { font-size: 12px; padding: 5px 26px 5px 10px; background: var(--card); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; min-width: 130px; -webkit-appearance: none; -moz-appearance: none; appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 14px) 50%, calc(100% - 9px) 50%; background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; }
+.filter-select:hover { border-color: var(--blue); }
+.filter-select:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 2px rgba(88,166,255,0.25); }
+.filter-select option { background: var(--card); color: var(--fg); }
+.btn-sm { font-size: 11px; padding: 3px 10px; background: var(--card); color: var(--blue); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
 .btn-sm:hover { background: var(--border); }
-.range-btns { display: flex; gap: 4px; margin-left: 12px; }
-.range-btn { font-size: 11px; padding: 3px 10px; background: var(--card); color: var(--muted); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
-.range-btn.active { background: var(--blue); color: #fff; border-color: var(--blue); }
-.refresh-btns { display: flex; gap: 4px; margin-left: 12px; align-items: center; }
-.refresh-label { font-size: 10px; color: var(--muted); text-transform: uppercase; font-weight: 600; margin-right: 2px; }
-.btn-refresh { font-size: 11px; padding: 3px 10px; background: var(--card); color: var(--green); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; margin-left: 6px; }
-.btn-refresh:hover { background: var(--border); }
+.model-dd { position: relative; display: inline-block; }
+.model-dd-btn { font-size: 12px; padding: 5px 26px 5px 10px; background: var(--card); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; min-width: 180px; text-align: left; position: relative; font-family: inherit; }
+.model-dd-btn:hover { border-color: var(--blue); }
+.model-dd-btn::after { content: ''; position: absolute; right: 10px; top: 50%; margin-top: -2px; width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid var(--muted); }
+.model-dd-panel { position: absolute; top: calc(100% + 4px); left: 0; min-width: 240px; max-height: 340px; overflow-y: auto; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 8px; z-index: 100; box-shadow: 0 6px 18px rgba(0,0,0,0.45); display: none; }
+.model-dd.open .model-dd-panel { display: block; }
+.model-dd.open .model-dd-btn { border-color: var(--blue); }
+.model-dd-actions { display: flex; gap: 6px; padding-bottom: 6px; margin-bottom: 6px; border-bottom: 1px solid var(--border); }
+.model-dd-actions .btn-sm { flex: 1; text-align: center; }
+.model-dd-list { display: flex; flex-direction: column; gap: 2px; }
+.model-dd-list label { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 4px; font-size: 12px; cursor: pointer; }
+.model-dd-list label:hover { background: var(--border); }
+.model-dd-list input[type="checkbox"] { margin: 0; cursor: pointer; }
+.btn-refresh { font-size: 13px; padding: 4px 9px; background: var(--card); color: var(--green); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; line-height: 1; }
+.btn-refresh:hover { background: var(--border); border-color: var(--green); }
 .btn-refresh.spinning { animation: spin 0.8s linear; pointer-events: none; }
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .stats-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
@@ -394,51 +407,117 @@ function getRangeBounds(r) {
 function rangeIncludesToday(r) { return r !== 'pm'; }
 
 function buildFilterBar() {
-  let h = '<span style="font-size:11px;color:var(--muted);text-transform:uppercase;font-weight:600;">Models</span>';
+  const allCount = DATA.allModels.length;
+  const selCount = selectedModels.size;
+  let modelBtnText;
+  if (selCount === 0) modelBtnText = 'No models';
+  else if (selCount === allCount) modelBtnText = 'All Models (' + allCount + ')';
+  else modelBtnText = selCount + ' of ' + allCount + ' selected';
+
+  let modelOpts = '';
   DATA.allModels.forEach(m => {
     const chk = selectedModels.has(m) ? ' checked' : '';
-    h += ' <label><input type="checkbox" data-model="'+esc(m)+'"'+chk+' onchange="toggleModel(this)"> <span class="model-tag '+mc(m)+'">'+esc(m)+'</span></label>';
+    modelOpts += '<label><input type="checkbox" data-model="'+esc(m)+'"'+chk+' onchange="toggleModel(this)"><span class="model-tag '+mc(m)+'">'+esc(m)+'</span></label>';
   });
-  h += ' <button class="btn-sm" onclick="pickAll()">All</button><button class="btn-sm" onclick="pickNone()">None</button>';
-  h += '<div class="range-btns">';
-  ['7d','30d','90d','tw','tm','pm','all'].forEach(r => { h += '<button class="range-btn'+(r===selectedRange?' active':'')+'" onclick="setRange(this,\\''+r+'\\')">'+(r==='tw'?'This Week':r==='tm'?'This Month':r==='pm'?'Prev Month':r)+'</button>'; });
-  h += '</div>';  h += '<div class="refresh-btns"><span class="refresh-label">Refresh</span>';
-  [{l:'30s',v:30},{l:'1m',v:60},{l:'2m',v:120},{l:'5m',v:300},{l:'Off',v:0}].forEach(o => {
-    h += '<button class="range-btn'+(o.v===selectedRefresh?' active':'')+'" data-refresh-val="'+o.v+'" onclick="setRefresh(this,'+o.v+')">'+o.l+'</button>';
+
+  let rangeOpts = '';
+  ['7d','30d','90d','tw','tm','pm','all'].forEach(r => {
+    const sel = r === selectedRange ? ' selected' : '';
+    rangeOpts += '<option value="'+r+'"'+sel+'>'+esc(RANGE_LABELS[r]||r)+'</option>';
   });
+
+  let refreshOpts = '';
+  [{l:'Off',v:0},{l:'Every 30s',v:30},{l:'Every 1m',v:60},{l:'Every 2m',v:120},{l:'Every 5m',v:300}].forEach(o => {
+    const sel = o.v === selectedRefresh ? ' selected' : '';
+    refreshOpts += '<option value="'+o.v+'"'+sel+'>'+o.l+'</option>';
+  });
+
+  let h = '';
+  h += '<div class="filter-group">';
+  h +=   '<span class="filter-label">Models</span>';
+  h +=   '<div class="model-dd" id="model-dd">';
+  h +=     '<button class="model-dd-btn" type="button" onclick="toggleModelDD(event)">'+esc(modelBtnText)+'</button>';
+  h +=     '<div class="model-dd-panel" onclick="event.stopPropagation()">';
+  h +=       '<div class="model-dd-actions"><button class="btn-sm" type="button" onclick="pickAll()">All</button><button class="btn-sm" type="button" onclick="pickNone()">None</button></div>';
+  h +=       '<div class="model-dd-list">'+modelOpts+'</div>';
+  h +=     '</div>';
+  h +=   '</div>';
   h += '</div>';
-  h += '<button class="btn-refresh" onclick="manualRefresh(this)" title="Refresh now">&#x21bb;</button>';
+  h += '<div class="filter-group">';
+  h +=   '<span class="filter-label">Range</span>';
+  h +=   '<select class="filter-select" id="range-select" onchange="setRangeDD(this.value)">'+rangeOpts+'</select>';
+  h += '</div>';
+  h += '<div class="filter-group">';
+  h +=   '<span class="filter-label">Refresh</span>';
+  h +=   '<select class="filter-select" id="refresh-select" onchange="setRefreshDD(parseInt(this.value,10))">'+refreshOpts+'</select>';
+  h += '</div>';
+  h += '<button class="btn-refresh" type="button" onclick="manualRefresh(this)" title="Refresh now">&#x21bb;</button>';
+
   document.getElementById('filter-bar').innerHTML = h;
 }
-function toggleModel(cb) { if(cb.checked) selectedModels.add(cb.dataset.model); else selectedModels.delete(cb.dataset.model); _saveState(); queueRender(); }
-function pickAll() { DATA.allModels.forEach(m=>selectedModels.add(m)); document.querySelectorAll('#filter-bar input').forEach(c=>c.checked=true); _saveState(); queueRender(); }
-function pickNone() { selectedModels.clear(); document.querySelectorAll('#filter-bar input').forEach(c=>c.checked=false); _saveState(); queueRender(); }
-function setRange(btn, r) {
-  selectedRange=r;
-  btn.closest('.range-btns').querySelectorAll('.range-btn').forEach(b=>b.classList.remove('active'));
-  btn.classList.add('active');
+function updateModelDDLabel() {
+  const allCount = DATA.allModels.length;
+  const selCount = selectedModels.size;
+  let txt;
+  if (selCount === 0) txt = 'No models';
+  else if (selCount === allCount) txt = 'All Models (' + allCount + ')';
+  else txt = selCount + ' of ' + allCount + ' selected';
+  const btn = document.querySelector('#model-dd .model-dd-btn');
+  if (btn) btn.textContent = txt;
+}
+function toggleModelDD(e) {
+  if (e) e.stopPropagation();
+  const dd = document.getElementById('model-dd');
+  if (dd) dd.classList.toggle('open');
+}
+document.addEventListener('click', function(e) {
+  const dd = document.getElementById('model-dd');
+  if (dd && dd.classList.contains('open') && !dd.contains(e.target)) {
+    dd.classList.remove('open');
+  }
+});
+function toggleModel(cb) {
+  if (cb.checked) selectedModels.add(cb.dataset.model);
+  else selectedModels.delete(cb.dataset.model);
+  _saveState(); updateModelDDLabel(); queueRender();
+}
+function pickAll() {
+  DATA.allModels.forEach(m => selectedModels.add(m));
+  document.querySelectorAll('#model-dd input[type="checkbox"]').forEach(c => c.checked = true);
+  _saveState(); updateModelDDLabel(); queueRender();
+}
+function pickNone() {
+  selectedModels.clear();
+  document.querySelectorAll('#model-dd input[type="checkbox"]').forEach(c => c.checked = false);
+  _saveState(); updateModelDDLabel(); queueRender();
+}
+function setRangeDD(r) {
+  selectedRange = r;
   _saveState();
   // Auto-refresh awareness: disable when range doesn't include today
   if (!rangeIncludesToday(r) && selectedRefresh > 0) {
     selectedRefresh = 0;
     _saveState();
     vscode.postMessage({type:'refreshRate',intervalMs:0});
-    updateRefreshButtons();
+    syncRefreshSelect();
   } else if (rangeIncludesToday(r) && selectedRefresh === 0) {
     selectedRefresh = 120;
     _saveState();
     vscode.postMessage({type:'refreshRate',intervalMs:120000});
-    updateRefreshButtons();
+    syncRefreshSelect();
   }
   queueRender();
 }
-function updateRefreshButtons() {
-  document.querySelectorAll('.refresh-btns .range-btn').forEach(b => {
-    b.classList.toggle('active', parseInt(b.dataset.refreshVal||'-1') === selectedRefresh);
-  });
+function syncRefreshSelect() {
+  const sel = document.getElementById('refresh-select');
+  if (sel) sel.value = String(selectedRefresh);
 }
 function setTz(btn, tz) { selectedTz=tz; btn.closest('.tz-toggle').querySelectorAll('.tz-btn').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); _saveState(); queueRender(); }
-function setRefresh(btn, secs) { selectedRefresh=secs; btn.closest('.refresh-btns').querySelectorAll('.range-btn').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); _saveState(); vscode.postMessage({type:'refreshRate',intervalMs:secs*1000}); }
+function setRefreshDD(secs) {
+  selectedRefresh = secs;
+  _saveState();
+  vscode.postMessage({type:'refreshRate',intervalMs:secs*1000});
+}
 function manualRefresh(btn) { vscode.postMessage({type:'manualRefresh'}); }
 
 function queueRender() {
@@ -996,18 +1075,30 @@ function renderModelTable(sessions) {
   const m={};
   sessions.forEach(s=>{
     const k=s.modelName;
-    if(!m[k]){m[k]={model:k,mult:getMult(k,s.multiplier),sessions:new Set(),turns:0,prompt:0,output:0,tools:0,subs:0};}else{const sm=getMult(k,s.multiplier);if(sm>m[k].mult)m[k].mult=sm;}
+    // Track BOTH display label (for table) and family identifier (for AIC join).
+    // s.model carries modelFamily from VS Code metadata — e.g. "claude-opus-4.6" —
+    // which is exactly the key aicSummary.byModel uses. Joining on family is
+    // bulletproof; trying to normalize the display label was fragile.
+    if(!m[k]){m[k]={model:k,family:s.model||'',mult:getMult(k,s.multiplier),sessions:new Set(),turns:0,prompt:0,output:0,tools:0,subs:0};}else{const sm=getMult(k,s.multiplier);if(sm>m[k].mult)m[k].mult=sm; if(!m[k].family && s.model) m[k].family=s.model;}
     m[k].sessions.add(s.sessionId);m[k].turns+=s.turns;m[k].prompt+=(s.actualPrompt||s.prompt);m[k].output+=(s.actualOutput||s.output);m[k].tools+=s.toolCalls;m[k].subs+=s.subagents;
   });
   const sorted=Object.values(m).sort((a,b)=>(b.prompt+b.output)-(a.prompt+a.output));
-  // Get AIC credits per model from summary
+  // Build lookup keyed by lowercased family identifier (what aicSummary.byModel uses).
+  // Also normalize "claude-opus-4-6" → "claude-opus-4.6" because OTel attributes
+  // sometimes strip the dot in version separators.
+  const normFamily = (name) => String(name||'').toLowerCase().replace(/(\d)-(\d)/g,'$1.$2');
   const aicByModel = {};
   if (DATA.aicSummary && DATA.aicSummary.byModel) {
-    DATA.aicSummary.byModel.forEach(am => { aicByModel[am.model.toLowerCase()] = am; });
+    DATA.aicSummary.byModel.forEach(am => { aicByModel[normFamily(am.model)] = am; });
   }
   let rows='';
   sorted.forEach(m=>{
-    const aicModel = aicByModel[m.model.toLowerCase()] || null;
+    // Lookup priority: 1) family identifier (authoritative), 2) family-style normalization of display label (fallback for sessions with empty modelFamily).
+    let aicModel = m.family ? (aicByModel[normFamily(m.family)] || null) : null;
+    if (!aicModel) {
+      const labelAsFamily = String(m.model||'').toLowerCase().replace(/[\s_]+/g,'-').replace(/(\d)-(\d)/g,'$1.$2');
+      aicModel = aicByModel[labelAsFamily] || null;
+    }
     const credits = aicModel ? aicModel.totalCredits.toFixed(2) : '—';
     const tier = aicModel ? aicModel.tier : '';
     const tierBadge = tier === 'premium' ? ' <span class="mult-badge mult-high">P</span>' : tier === 'base' ? ' <span class="mult-badge mult-1">B</span>' : '';

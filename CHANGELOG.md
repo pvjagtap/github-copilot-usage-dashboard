@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.21] - 2026-06-11
+
+### Fixed
+
+- **"Usage by Model" AI Credits column now joins on `modelFamily`, not display-label normalization.** The v1.9.19 fix tried to normalize `s.modelName` (display label, e.g. `"Claude Opus 4.6"`) into the API family form (`"claude-opus-4.6"`) by collapsing whitespace to hyphens. Confirmed in the wild that this still didn't connect for real Anthropic rows in some sessions — the display label coming from VS Code's `metadata.name` is not always a clean `<vendor> <product> <version>` triple, and even small punctuation differences broke the lookup. `SessionView` in [src/dashboardData.ts](src/dashboardData.ts) already carries **both** `modelName` (display) and `model` (= `modelFamily` from `metadata.family`, which is **literally the same string** `aicSummary.byModel` uses), so `renderModelTable()` in [src/dashboardPanel.ts](src/dashboardPanel.ts) now joins on family directly. The aggregator preserves both fields per row (`{model: displayLabel, family: modelFamily}`); the AIC lookup tries family first, falls back to the label-normalization path only when family is empty (very old sessions where `metadata.family` was absent). No more guessing.
+
+## [1.9.20] - 2026-06-11
+
+### Fixed
+
+- **"AI Credits by Model" `Output` and `Cached` columns no longer report 0 for every post-June-1 model.** `AICCalculator.computeSummary()` in [src/aicCredits.ts](src/aicCredits.ts) had a long-standing shortcut: whenever a credit entry carried `actualCredits` (the API-reported `copilotUsageNanoAiu` overlaid by [src/dashboardData.ts](src/dashboardData.ts) since v1.9.17), it stuffed the **entire** authoritative value into `inputCredits` and zeroed `outputCredits` / `cachedCredits` — the comment even acknowledged it (`// attribute all to "input" for simplicity`). That was harmless when only the `Total` column existed, but the per-model table now shows all four buckets, so every Anthropic/GPT row read `Input ≈ Total`, `Output = 0`, `Cached = 0`. Now: when `actualCredits` is available, the calculator computes the rate-based input/output/cached breakdown from the entry's tokens, then **scales each component proportionally** so the three sum to the exact API-billed `actualCredits`. The displayed total stays API-authoritative (no drift vs the budget bar / `byDay` calendar) and the breakdown is finally meaningful. Edge cases: entries with no matching rate, or zero token counts (e.g. OMP/Pi agent entries that don't carry per-bucket tokens), still fall back to all-input — unchanged behaviour for those.
+
+## [1.9.19] - 2026-06-11
+
+### Fixed
+
+- **"Usage by Model" table now shows AI Credits for every post-June-1 model, not just `GPT-5.4`.** `renderModelTable()` in [src/dashboardPanel.ts](src/dashboardPanel.ts) joined session rows against `DATA.aicSummary.byModel` using a plain `.toLowerCase()` key, but the two sides use different naming conventions: the session aggregator keys on `s.modelName` — the **display label** from VS Code's `selectedModel.metadata.name` (e.g. `"Claude Opus 4.6"`, spaces preserved) — while `aicSummary.byModel[].model` keys on the **API family** emitted by the debug-log / OTel pipeline (e.g. `"claude-opus-4.6"`, hyphens; sometimes `"claude-opus-4-6"` from OTel attributes where dots were stripped). The two never matched, so every Anthropic row, `GPT-5.5`, `Auto`, etc. rendered `—` in the AI Credits column. `GPT-5.4` coincidentally worked because its display string equals its API family string. Added a small `normModelKey()` helper applied to both sides of the join: lowercase → collapse whitespace/underscores to `-` → restore version dots (`\d-\d` → `\d.\d`). After normalization `"Claude Opus 4.6"` / `"claude-opus-4-6"` / `"claude-opus-4.6"` all map to the same key. Models with usage only **before** `AIC_EFFECTIVE_DATE = 2026-06-01` (filtered out of `aicSummary.byModel` by design in [src/dashboardData.ts](src/dashboardData.ts)) and the `Auto` router (never appears in AIC byModel) still correctly show `—`.
+
+### Changed
+
+- **Filter bar redesigned: Models / Range / Refresh are now compact dropdowns instead of inline button rows.** `buildFilterBar()` in [src/dashboardPanel.ts](src/dashboardPanel.ts) was rewritten to render three grouped controls with `UPPERCASE` micro-labels:
+  - **Models** — a custom button (`.model-dd-btn`) that opens a checkbox panel (`.model-dd-panel`) on click. The button label summarises selection state (`All Models (N)` / `K of N selected` / `No models`). Includes `All` / `None` quick actions inside the panel. A document-level click handler closes the panel on outside-click and `event.stopPropagation()` keeps clicks inside the panel from closing it.
+  - **Range** — a native `<select class="filter-select">` populated from the existing `RANGE_LABELS` map, so option text reads `"Last 7 Days"` / `"This Week"` etc. instead of the old `7d` / `tw` button chips. `setRangeDD()` preserves the existing auto-refresh-on-range-change behaviour (turn refresh off for historical ranges, restore 2 m default when returning to today).
+  - **Refresh** — a native `<select>` with `Off` / `Every 30s` / `Every 1m` / `Every 2m` / `Every 5m`. The manual refresh `↻` button is restyled (slightly larger, rounded, green-on-hover border).
+  - New helpers `updateModelDDLabel()` / `syncRefreshSelect()` keep the dropdown labels in sync after programmatic state changes (e.g. range-change auto-toggling refresh). Old per-button active-class fiddling (`updateRefreshButtons`, `setRange(btn, r)`, `setRefresh(btn, secs)`) is gone — `<select>` elements handle their own selection state.
+  - CSS adds `.filter-group` / `.filter-label` / `.filter-select` / `.model-dd*` rules; obsolete `.range-btns` / `.range-btn` / `.refresh-btns` / `.refresh-label` rules removed.
+
 ## [1.9.18] - 2026-06-11
 
 ### Added
