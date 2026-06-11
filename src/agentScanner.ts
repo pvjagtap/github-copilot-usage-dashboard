@@ -20,6 +20,7 @@
 import * as fsp from "fs/promises";
 import * as path from "path";
 import * as os from "os";
+import { isObj, mapConcurrent } from "./util";
 
 // ─── Public Types ──────────────────────────────────────────────
 
@@ -50,22 +51,22 @@ export interface AgentSessionData {
   model: string;
   provider: string;
   llmCalls: number;
-  totalInput: number;       // net input tokens
+  totalInput: number; // net input tokens
   totalOutput: number;
   totalCacheRead: number;
   totalCacheWrite: number;
-  totalTokens: number;      // input + output + cacheRead + cacheWrite
+  totalTokens: number; // input + output + cacheRead + cacheWrite
   premiumRequests: number;
   /** Per-model token breakdown; used for per-model AIC calculation in dashboardData */
   modelBreakdown: Record<string, AgentModelTokens>;
-  firstTs: number;          // epoch ms
-  lastTs: number;           // epoch ms
+  firstTs: number; // epoch ms
+  lastTs: number; // epoch ms
 }
 
 export interface AgentScanResult {
   /** All sessions from both sources within the current billing period */
   sessions: AgentSessionData[];
-  billingStart: number;     // epoch ms — 1st of current month UTC
+  billingStart: number; // epoch ms — 1st of current month UTC
   totalInput: number;
   totalOutput: number;
   totalCacheRead: number;
@@ -85,7 +86,6 @@ export interface AgentScanResult {
   scanMs: number;
 }
 
-
 // ─── Directory Resolution ─────────────────────────────────────
 
 export function getOmpSessionsRoot(): string {
@@ -99,35 +99,13 @@ export function getPiSessionsRoot(): string {
 
 // ─── Helpers ──────────────────────────────────────────────────
 
-function isObj(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-
+// isObj / mapConcurrent now imported from ./util
 async function readdirSafe(dir: string): Promise<string[]> {
-  try { return await fsp.readdir(dir); } catch { return []; }
-}
-
-async function mapConcurrent<T, R>(
-  items: T[],
-  concurrency: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = new Array(items.length);
-  let idx = 0;
-
-  async function worker(): Promise<void> {
-    while (idx < items.length) {
-      const i = idx++;
-      results[i] = await fn(items[i]);
-    }
+  try {
+    return await fsp.readdir(dir);
+  } catch {
+    return [];
   }
-
-  const workers: Promise<void>[] = [];
-  for (let i = 0; i < Math.min(concurrency, items.length); i++) {
-    workers.push(worker());
-  }
-  await Promise.all(workers);
-  return results;
 }
 
 // ─── Mtime Cache ──────────────────────────────────────────────
@@ -139,18 +117,28 @@ const fileCache = new Map<string, { mtime: number; data: AgentSessionData }>();
 function parseAgentSession(
   content: string,
   filePath: string,
-  source: AgentSource,
+  source: AgentSource
 ): AgentSessionData | null {
   const lines = content.split("\n");
-  if (lines.length === 0) { return null; }
+  if (lines.length === 0) {
+    return null;
+  }
 
   // Parse session header (first line)
   let header: unknown;
-  try { header = JSON.parse(lines[0]); } catch { return null; }
-  if (!isObj(header) || header["type"] !== "session") { return null; }
+  try {
+    header = JSON.parse(lines[0]);
+  } catch {
+    return null;
+  }
+  if (!isObj(header) || header["type"] !== "session") {
+    return null;
+  }
 
   const sessionId = typeof header["id"] === "string" ? header["id"] : "";
-  if (!sessionId) { return null; }
+  if (!sessionId) {
+    return null;
+  }
 
   const cwd = typeof header["cwd"] === "string" ? header["cwd"] : "";
   const title = typeof header["title"] === "string" ? header["title"] : "";
@@ -169,23 +157,35 @@ function parseAgentSession(
 
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i];
-    if (!line) { continue; }
+    if (!line) {
+      continue;
+    }
 
     let entry: unknown;
-    try { entry = JSON.parse(line); } catch { continue; }
-    if (!isObj(entry) || entry["type"] !== "message") { continue; }
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isObj(entry) || entry["type"] !== "message") {
+      continue;
+    }
 
     const msg = entry["message"];
-    if (!isObj(msg) || msg["role"] !== "assistant") { continue; }
+    if (!isObj(msg) || msg["role"] !== "assistant") {
+      continue;
+    }
 
     const usage = msg["usage"];
-    if (!isObj(usage)) { continue; }
+    if (!isObj(usage)) {
+      continue;
+    }
 
     const inp = typeof usage["input"] === "number" ? usage["input"] : 0;
     const out = typeof usage["output"] === "number" ? usage["output"] : 0;
-    const cr  = typeof usage["cacheRead"] === "number" ? usage["cacheRead"] : 0;
-    const cw  = typeof usage["cacheWrite"] === "number" ? usage["cacheWrite"] : 0;
-    const pr  = typeof usage["premiumRequests"] === "number" ? usage["premiumRequests"] : 0;
+    const cr = typeof usage["cacheRead"] === "number" ? usage["cacheRead"] : 0;
+    const cw = typeof usage["cacheWrite"] === "number" ? usage["cacheWrite"] : 0;
+    const pr = typeof usage["premiumRequests"] === "number" ? usage["premiumRequests"] : 0;
 
     totalInput += inp;
     totalOutput += out;
@@ -195,7 +195,7 @@ function parseAgentSession(
     llmCalls++;
 
     // Per-model token accumulation
-    const callModel = typeof msg["model"] === "string" ? msg["model"] : (primaryModel || "unknown");
+    const callModel = typeof msg["model"] === "string" ? msg["model"] : primaryModel || "unknown";
     const existing = modelMap.get(callModel);
     if (existing) {
       existing.input += inp;
@@ -204,11 +204,21 @@ function parseAgentSession(
       existing.cacheWrite += cw;
       existing.llmCalls++;
     } else {
-      modelMap.set(callModel, { input: inp, output: out, cacheRead: cr, cacheWrite: cw, llmCalls: 1 });
+      modelMap.set(callModel, {
+        input: inp,
+        output: out,
+        cacheRead: cr,
+        cacheWrite: cw,
+        llmCalls: 1,
+      });
     }
 
-    if (!primaryModel && typeof msg["model"] === "string") { primaryModel = msg["model"]; }
-    if (!provider && typeof msg["provider"] === "string") { provider = msg["provider"]; }
+    if (!primaryModel && typeof msg["model"] === "string") {
+      primaryModel = msg["model"];
+    }
+    if (!provider && typeof msg["provider"] === "string") {
+      provider = msg["provider"];
+    }
 
     // Timestamp: Pi stores numeric ms in msg.timestamp; both store ISO in entry.timestamp
     let ts = 0;
@@ -218,12 +228,18 @@ function parseAgentSession(
       ts = new Date(entry["timestamp"] as string).getTime();
     }
     if (ts > 0) {
-      if (firstTs === 0 || ts < firstTs) { firstTs = ts; }
-      if (ts > lastTs) { lastTs = ts; }
+      if (firstTs === 0 || ts < firstTs) {
+        firstTs = ts;
+      }
+      if (ts > lastTs) {
+        lastTs = ts;
+      }
     }
   }
 
-  if (llmCalls === 0) { return null; }
+  if (llmCalls === 0) {
+    return null;
+  }
 
   // Primary model = most LLM calls (deterministic tiebreak by name)
   let maxCalls = 0;
@@ -259,39 +275,51 @@ function parseAgentSession(
 
 async function scanDirectory(
   sessionsRoot: string,
-  source: AgentSource,
+  source: AgentSource
 ): Promise<AgentSessionData[]> {
   const projectDirs = await readdirSafe(sessionsRoot);
   const allSessions: AgentSessionData[] = [];
 
-  const projectResults = await mapConcurrent(projectDirs, 8, async (projDir) => {
+  const projectResults = await mapConcurrent(projectDirs, 8, async projDir => {
     const projPath = path.join(sessionsRoot, projDir);
     const projStat = await fsp.stat(projPath).catch(() => null);
-    if (!projStat?.isDirectory()) { return []; }
+    if (!projStat?.isDirectory()) {
+      return [];
+    }
 
     const files = await readdirSafe(projPath);
     const jsonlFiles = files.filter(f => f.endsWith(".jsonl"));
 
-    const sessions = await mapConcurrent(jsonlFiles, 8, async (file) => {
+    const sessions = await mapConcurrent(jsonlFiles, 8, async file => {
       const filePath = path.join(projPath, file);
       try {
         const fstat = await fsp.stat(filePath);
-        if (!fstat.isFile()) { return null; }
+        if (!fstat.isFile()) {
+          return null;
+        }
 
         const cached = fileCache.get(filePath);
-        if (cached && cached.mtime === fstat.mtimeMs) { return cached.data; }
+        if (cached && cached.mtime === fstat.mtimeMs) {
+          return cached.data;
+        }
 
         const content = await fsp.readFile(filePath, "utf-8");
         const data = parseAgentSession(content, filePath, source);
-        if (data) { fileCache.set(filePath, { mtime: fstat.mtimeMs, data }); }
+        if (data) {
+          fileCache.set(filePath, { mtime: fstat.mtimeMs, data });
+        }
         return data;
-      } catch { return null; }
+      } catch {
+        return null;
+      }
     });
 
     return sessions.filter((s): s is AgentSessionData => s !== null);
   });
 
-  for (const sessions of projectResults) { allSessions.push(...sessions); }
+  for (const sessions of projectResults) {
+    allSessions.push(...sessions);
+  }
   return allSessions;
 }
 
@@ -313,17 +341,21 @@ export async function scanAgentSessions(): Promise<AgentScanResult> {
   ]);
 
   // All-time per-source totals (before billing filter) — for historical token display
-  let ompAllTimeSessions = 0, ompAllTimeLlmCalls = 0, ompAllTimeTokens = 0;
-  let piAllTimeSessions  = 0, piAllTimeLlmCalls  = 0, piAllTimeTokens  = 0;
+  let ompAllTimeSessions = 0,
+    ompAllTimeLlmCalls = 0,
+    ompAllTimeTokens = 0;
+  let piAllTimeSessions = 0,
+    piAllTimeLlmCalls = 0,
+    piAllTimeTokens = 0;
   for (const s of ompRaw) {
     ompAllTimeSessions++;
     ompAllTimeLlmCalls += s.llmCalls;
-    ompAllTimeTokens   += s.totalTokens;
+    ompAllTimeTokens += s.totalTokens;
   }
   for (const s of piRaw) {
     piAllTimeSessions++;
     piAllTimeLlmCalls += s.llmCalls;
-    piAllTimeTokens   += s.totalTokens;
+    piAllTimeTokens += s.totalTokens;
   }
 
   // Billing-period sessions (for AIC credit computation)
@@ -331,19 +363,21 @@ export async function scanAgentSessions(): Promise<AgentScanResult> {
   const billable = allRaw.filter(s => (s.lastTs || s.firstTs) >= billingStart);
   billable.sort((a, b) => b.lastTs - a.lastTs);
 
-  const totalInput      = billable.reduce((s, x) => s + x.totalInput, 0);
-  const totalOutput     = billable.reduce((s, x) => s + x.totalOutput, 0);
-  const totalCacheRead  = billable.reduce((s, x) => s + x.totalCacheRead, 0);
+  const totalInput = billable.reduce((s, x) => s + x.totalInput, 0);
+  const totalOutput = billable.reduce((s, x) => s + x.totalOutput, 0);
+  const totalCacheRead = billable.reduce((s, x) => s + x.totalCacheRead, 0);
   const totalCacheWrite = billable.reduce((s, x) => s + x.totalCacheWrite, 0);
-  const totalLlmCalls   = billable.reduce((s, x) => s + x.llmCalls, 0);
-  const totalPremium    = billable.reduce((s, x) => s + x.premiumRequests, 0);
+  const totalLlmCalls = billable.reduce((s, x) => s + x.llmCalls, 0);
+  const totalPremium = billable.reduce((s, x) => s + x.premiumRequests, 0);
 
   // Evict stale cache entries for files that no longer exist on disk.
   // fileCache only holds successfully parsed sessions, so any key absent from
   // the current scan corresponds to a deleted (or moved) file.
   const seenPaths = new Set<string>([...ompRaw, ...piRaw].map(s => s.filePath));
   for (const key of fileCache.keys()) {
-    if (!seenPaths.has(key)) { fileCache.delete(key); }
+    if (!seenPaths.has(key)) {
+      fileCache.delete(key);
+    }
   }
 
   return {
@@ -357,7 +391,7 @@ export async function scanAgentSessions(): Promise<AgentScanResult> {
     totalLlmCalls,
     totalPremiumRequests: totalPremium,
     ompSessionCount: billable.filter(s => s.source === "omp").length,
-    piSessionCount:  billable.filter(s => s.source === "pi").length,
+    piSessionCount: billable.filter(s => s.source === "pi").length,
     ompAllTimeSessions,
     ompAllTimeLlmCalls,
     ompAllTimeTokens,

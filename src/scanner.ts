@@ -8,6 +8,7 @@ import * as fs from "fs";
 import * as fsp from "fs/promises";
 import * as path from "path";
 import * as os from "os";
+import { isObj, isArr, mapConcurrent } from "./util";
 
 // ─── Data Types ───────────────────────────────────────────────
 
@@ -134,14 +135,38 @@ function get(obj: unknown, ...keys: string[]): unknown {
   return cur;
 }
 
-/** Check if unknown value is a non-null object */
-function isObj(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
+// isObj / isArr now imported from ./util
+
+/**
+ * Strip file:// scheme and decode percent-encoding from a VS Code workspace URI.
+ * On Windows, removes the leading slash before the drive letter (e.g. "/C:/" → "C:/").
+ * Returns the string unchanged if it doesn't start with file://.
+ */
+function normalizeFileUri(uri: string): string {
+  let p = uri;
+  if (p.startsWith("file:///")) { p = p.slice(8); }
+  else if (p.startsWith("file://")) { p = p.slice(7); }
+  p = decodeURIComponent(p);
+  if (/^\/[A-Z]:/i.test(p)) { p = p.slice(1); }
+  return p;
 }
 
-/** Check if unknown value is an array */
-function isArr(v: unknown): v is unknown[] {
-  return Array.isArray(v);
+/**
+ * Pull (agentName, description) from a runSubagent tool call's `arguments`
+ * field. Accepts either a JSON string or an already-parsed object.
+ * Returns sensible defaults when parsing fails or fields are missing.
+ */
+function extractSubagentArgs(rawArgs: unknown): { agentName: string; description: string } {
+  let agentName = "unknown";
+  let description = "";
+  try {
+    const args: unknown = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs;
+    if (isObj(args)) {
+      agentName = typeof args.agentName === "string" ? args.agentName : "unknown";
+      description = typeof args.description === "string" ? args.description : "";
+    }
+  } catch { /* ignore */ }
+  return { agentName, description };
 }
 
 // ─── Helpers ──────────────────────────────────────────────────
@@ -154,11 +179,7 @@ function epochMsToIso(ms: number): string {
 function extractWorkspaceName(cacheKey: string | undefined, wsHash: string): string {
   if (!cacheKey) { return `workspace-${wsHash.slice(0, 8)}`; }
   try {
-    let p = cacheKey;
-    if (p.startsWith("file:///")) { p = p.slice(8); }
-    else if (p.startsWith("file://")) { p = p.slice(7); }
-    p = decodeURIComponent(p);
-    if (/^\/[A-Z]:/i.test(p)) { p = p.slice(1); }
+    const p = normalizeFileUri(cacheKey);
     const parts = p.replace(/\\/g, "/").split("/").filter(Boolean);
     if (parts.length >= 2) { return parts.slice(-2).join("/"); }
     if (parts.length === 1) { return parts[0]; }
@@ -193,29 +214,7 @@ function extractRequestText(requests: unknown[]): string {
 
 // ─── Concurrency Utility ──────────────────────────────────────
 
-/** Run async tasks with bounded concurrency, preserving order. */
-async function mapConcurrent<T, R>(
-  items: T[],
-  concurrency: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let idx = 0;
-
-  async function worker(): Promise<void> {
-    while (idx < items.length) {
-      const i = idx++;
-      results[i] = await fn(items[i]);
-    }
-  }
-
-  const workers = Array.from(
-    { length: Math.min(concurrency, items.length) },
-    () => worker(),
-  );
-  await Promise.all(workers);
-  return results;
-}
+// mapConcurrent now imported from ./util
 
 // ─── JSONL Parser ─────────────────────────────────────────────
 
@@ -323,16 +322,7 @@ function parseSessionContent(content: string, filePath: string, wsHash: string, 
                   const isSub = toolName === "runSubagent";
                   toolCalls.push({ sessionId, turnIndex: ri, callIndex, toolName, isSubagent: isSub });
                   if (isSub) {
-                    let aName = "unknown";
-                    let desc = "";
-                    try {
-                      const raw = tc.arguments;
-                      const args: unknown = typeof raw === "string" ? JSON.parse(raw) : raw;
-                      if (isObj(args)) {
-                        aName = typeof args.agentName === "string" ? args.agentName : "unknown";
-                        desc = typeof args.description === "string" ? args.description : "";
-                      }
-                    } catch { /* ignore */ }
+                    const { agentName: aName, description: desc } = extractSubagentArgs(tc.arguments);
                     subagents.push({ sessionId, turnIndex: ri, callIndex, agentName: aName, description: desc });
                   }
                   callIndex++;
@@ -431,16 +421,7 @@ function parseSessionContent(content: string, filePath: string, wsHash: string, 
             toolCalls.push({ sessionId, turnIndex, callIndex, toolName, isSubagent: isSub });
 
             if (isSub) {
-              let agentName = "unknown";
-              let desc = "";
-              try {
-                const raw = tc.arguments;
-                const args: unknown = typeof raw === "string" ? JSON.parse(raw) : raw;
-                if (isObj(args)) {
-                  agentName = typeof args.agentName === "string" ? args.agentName : "unknown";
-                  desc = typeof args.description === "string" ? args.description : "";
-                }
-              } catch { /* ignore */ }
+              const { agentName, description: desc } = extractSubagentArgs(tc.arguments);
               subagents.push({ sessionId, turnIndex, callIndex, agentName, description: desc });
             }
             callIndex++;
@@ -547,11 +528,7 @@ interface FileEntry {
 
 async function resolveWorkspaceFile(wsUri: string, wsHash: string): Promise<string> {
   try {
-    let p = wsUri;
-    if (p.startsWith("file:///")) { p = p.slice(8); }
-    else if (p.startsWith("file://")) { p = p.slice(7); }
-    p = decodeURIComponent(p);
-    if (/^\/[A-Z]:/i.test(p)) { p = p.slice(1); }
+    const p = normalizeFileUri(wsUri);
 
     const raw = await fsp.readFile(p, "utf-8");
     const wsContent: unknown = JSON.parse(raw);

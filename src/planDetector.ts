@@ -188,9 +188,7 @@ async function showPickerFallback(
       const plan = skuToPlan(sku);
       if (plan) {
         log(`planDetector: consent-path detected sku=${sku} → plan=${plan}`);
-        await cfg.update("plan", plan, vscode.ConfigurationTarget.Global);
-        await context.globalState.update(LAST_DETECTED_SKU_KEY, sku);
-        await context.globalState.update(DETECTION_DONE_KEY, true);
+        await persistDetectedPlan(context, cfg, sku, plan);
         void vscode.window.showInformationMessage(
           `Copilot Usage: detected your plan as "${plan}".`
         );
@@ -206,23 +204,9 @@ async function showPickerFallback(
       log("planDetector: consent dialog denied or failed — falling through to picker");
     }
     // Fall through and let user pick manually.
-    const picked = await vscode.window.showQuickPick(choices, {
-      placeHolder: "Select your GitHub Copilot plan",
-      ignoreFocusOut: true,
-    });
-    if (picked) {
-      await cfg.update("plan", picked.plan, vscode.ConfigurationTarget.Global);
-      log(`planDetector: user picked plan=${picked.plan}`);
-    }
+    await runQuickPickAndPersist(cfg, log, choices);
   } else if (pick === "Choose plan…") {
-    const picked = await vscode.window.showQuickPick(choices, {
-      placeHolder: "Select your GitHub Copilot plan",
-      ignoreFocusOut: true,
-    });
-    if (picked) {
-      await cfg.update("plan", picked.plan, vscode.ConfigurationTarget.Global);
-      log(`planDetector: user picked plan=${picked.plan}`);
-    }
+    await runQuickPickAndPersist(cfg, log, choices);
   } else if (pick === "Skip (use Business)") {
     // Persist the explicit Business choice so we treat it as user-set and
     // never re-prompt or auto-overwrite.
@@ -303,9 +287,7 @@ export async function detectAndApplyPlan(
   }
 
   log(`planDetector: detected sku=${sku} → plan=${plan}`);
-  await cfg.update("plan", plan, vscode.ConfigurationTarget.Global);
-  await context.globalState.update(LAST_DETECTED_SKU_KEY, sku);
-  await context.globalState.update(DETECTION_DONE_KEY, true);
+  await persistDetectedPlan(context, cfg, sku, plan);
 
   // Inform the user — non-modal, with an easy way to override if our
   // mapping is wrong. This is the only popup detection ever shows on the
@@ -333,4 +315,41 @@ export async function detectAndApplyPlan(
 export async function resetPlanDetection(context: vscode.ExtensionContext): Promise<void> {
   await context.globalState.update(DETECTION_DONE_KEY, undefined);
   await context.globalState.update(LAST_DETECTED_SKU_KEY, undefined);
+}
+
+// ─── Internal helpers ─────────────────────────────────────────
+
+/**
+ * Persist a detected plan + sku into global state. Shared by the silent and
+ * consent detection paths so both record exactly the same data.
+ */
+async function persistDetectedPlan(
+  context: vscode.ExtensionContext,
+  cfg: vscode.WorkspaceConfiguration,
+  sku: string | null,
+  plan: DetectedPlan
+): Promise<void> {
+  await cfg.update("plan", plan, vscode.ConfigurationTarget.Global);
+  await context.globalState.update(LAST_DETECTED_SKU_KEY, sku);
+  await context.globalState.update(DETECTION_DONE_KEY, true);
+}
+
+/**
+ * Show the manual plan picker and, if the user picks something, persist it.
+ * Called from both the "Detect via GitHub → fall through" branch and the
+ * direct "Choose plan…" branch with identical behavior.
+ */
+async function runQuickPickAndPersist(
+  cfg: vscode.WorkspaceConfiguration,
+  log: LogFn,
+  choices: Array<vscode.QuickPickItem & { plan: DetectedPlan }>
+): Promise<void> {
+  const picked = await vscode.window.showQuickPick(choices, {
+    placeHolder: "Select your GitHub Copilot plan",
+    ignoreFocusOut: true,
+  });
+  if (picked) {
+    await cfg.update("plan", picked.plan, vscode.ConfigurationTarget.Global);
+    log(`planDetector: user picked plan=${picked.plan}`);
+  }
 }

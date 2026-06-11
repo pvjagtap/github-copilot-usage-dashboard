@@ -6,7 +6,11 @@ import { scanWorkspaceStorage, ScanResult } from "./scanner";
 import { scanAgentSessions, AgentScanResult } from "./agentScanner";
 import { buildDashboardData, DashboardData } from "./dashboardData";
 import { AICConfig, DEFAULT_AIC_CONFIG, createCalculatorFromConfig } from "./aicCredits";
-import { DailyLimitTracker, getDailyLimitConfig } from "./dailyLimitTracker";
+import {
+  DailyLimitTracker,
+  getDailyLimitConfig,
+  type DailyLimitSnapshot,
+} from "./dailyLimitTracker";
 import { LimitOverlay } from "./limitOverlay";
 import { Enforcement } from "./enforcement";
 import { HookManager } from "./hookManager";
@@ -602,17 +606,7 @@ function computeAndPushDailyLimit(calculator: ReturnType<typeof createCalculator
     // Keep shield in sync if it happens to be open (e.g. user just toggled off
     // from inside the webview — they want the toggle to still respond).
     limitOverlay?.render(snap);
-    return {
-      stage: snap.stage,
-      used: snap.used,
-      limit: snap.limit,
-      percent: snap.percent,
-      usedDollars: snap.usedDollars,
-      limitDollars: snap.limitDollars,
-      dollarMode: snap.dollarMode,
-      snoozed: snap.snoozed,
-      resumed: snap.resumed,
-    };
+    return summarizeSnapshot(snap);
   }
 
   // Auto-clear resume/snooze when the day rolls over.
@@ -649,6 +643,11 @@ function computeAndPushDailyLimit(calculator: ReturnType<typeof createCalculator
   // Always re-render overlay so it can re-nag on every new request while at limit.
   limitOverlay?.render(snap);
 
+  return summarizeSnapshot(snap);
+}
+
+/** Project the subset of snapshot fields exposed via the status bar callback. */
+function summarizeSnapshot(snap: DailyLimitSnapshot) {
   return {
     stage: snap.stage,
     used: snap.used,

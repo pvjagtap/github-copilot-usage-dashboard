@@ -1,4 +1,5 @@
 import * as http from "http";
+import { isObj, isArr, utcNow } from "./util";
 
 /** Parsed OTel trace request with token counts. */
 export interface OTelRequest {
@@ -43,17 +44,7 @@ type StatsListener = (stats: LiveStats) => void;
 
 // ─── Safe JSON Helpers ────────────────────────────────────────
 
-function isObj(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
-
-function isArr(v: unknown): v is unknown[] {
-  return Array.isArray(v);
-}
-
-function utcNow(): string {
-  return new Date().toISOString();
-}
+// isObj / isArr / utcNow now imported from ./util
 
 function nsToIso(ns: string): string {
   try {
@@ -66,20 +57,30 @@ function nsToIso(ns: string): string {
 
 /** Extract typed attribute value from OTel attribute array. */
 function getAttr(attributes: unknown, key: string): unknown {
-  if (!isArr(attributes)) { return undefined; }
+  if (!isArr(attributes)) {
+    return undefined;
+  }
   for (const item of attributes) {
-    if (!isObj(item) || item.key !== key) { continue; }
+    if (!isObj(item) || item.key !== key) {
+      continue;
+    }
     const v = item.value;
-    if (!isObj(v)) { return v; }
+    if (!isObj(v)) {
+      return v;
+    }
     for (const k of ["stringValue", "intValue", "doubleValue", "boolValue"] as const) {
-      if (k in v) { return v[k]; }
+      if (k in v) {
+        return v[k];
+      }
     }
   }
   return undefined;
 }
 
 function isToolSpan(span: unknown): boolean {
-  if (!isObj(span)) { return false; }
+  if (!isObj(span)) {
+    return false;
+  }
   const attrs = span.attributes ?? [];
   return ["tool.name", "gen_ai.tool.name", "tool.type"].some(k => getAttr(attrs, k) !== undefined);
 }
@@ -88,24 +89,42 @@ function parseTraceGroups(payload: unknown, log?: (msg: string) => void): OTelRe
   const grouped = new Map<string, Record<string, unknown>[]>();
   let totalSpans = 0;
 
-  if (!isObj(payload)) { return []; }
+  if (!isObj(payload)) {
+    return [];
+  }
 
   const resourceSpans = payload.resourceSpans;
-  if (!isArr(resourceSpans)) { return []; }
+  if (!isArr(resourceSpans)) {
+    return [];
+  }
 
   for (const rs of resourceSpans) {
-    if (!isObj(rs)) { continue; }
+    if (!isObj(rs)) {
+      continue;
+    }
     const scopeSpans = rs.scopeSpans;
-    if (!isArr(scopeSpans)) { continue; }
+    if (!isArr(scopeSpans)) {
+      continue;
+    }
     for (const ss of scopeSpans) {
-      if (!isObj(ss)) { continue; }
+      if (!isObj(ss)) {
+        continue;
+      }
       const spans = ss.spans;
-      if (!isArr(spans)) { continue; }
+      if (!isArr(spans)) {
+        continue;
+      }
       for (const span of spans) {
-        if (!isObj(span)) { continue; }
+        if (!isObj(span)) {
+          continue;
+        }
         const tid = span.traceId;
-        if (typeof tid !== "string" || !tid) { continue; }
-        if (!grouped.has(tid)) { grouped.set(tid, []); }
+        if (typeof tid !== "string" || !tid) {
+          continue;
+        }
+        if (!grouped.has(tid)) {
+          grouped.set(tid, []);
+        }
         grouped.get(tid)!.push(span);
         totalSpans++;
       }
@@ -124,81 +143,112 @@ function parseTraceGroups(payload: unknown, log?: (msg: string) => void): OTelRe
     const pool = candidates.length > 0 ? candidates : spans;
     const primary = pool.reduce((best, s) => {
       const a = s.attributes ?? [];
-      const hasTokens = (getAttr(a, "gen_ai.usage.prompt_tokens") ?? getAttr(a, "gen_ai.usage.input_tokens")) !== undefined;
-      const hasModel = (getAttr(a, "gen_ai.request.model") ?? getAttr(a, "gen_ai.response.model")) !== undefined;
+      const hasTokens =
+        (getAttr(a, "gen_ai.usage.prompt_tokens") ?? getAttr(a, "gen_ai.usage.input_tokens")) !==
+        undefined;
+      const hasModel =
+        (getAttr(a, "gen_ai.request.model") ?? getAttr(a, "gen_ai.response.model")) !== undefined;
       const score = (hasTokens ? 2 : 0) + (hasModel ? 1 : 0);
       const bestA = best.attributes ?? [];
-      const bestHasTokens = (getAttr(bestA, "gen_ai.usage.prompt_tokens") ?? getAttr(bestA, "gen_ai.usage.input_tokens")) !== undefined;
-      const bestHasModel = (getAttr(bestA, "gen_ai.request.model") ?? getAttr(bestA, "gen_ai.response.model")) !== undefined;
+      const bestHasTokens =
+        (getAttr(bestA, "gen_ai.usage.prompt_tokens") ??
+          getAttr(bestA, "gen_ai.usage.input_tokens")) !== undefined;
+      const bestHasModel =
+        (getAttr(bestA, "gen_ai.request.model") ?? getAttr(bestA, "gen_ai.response.model")) !==
+        undefined;
       const bestScore = (bestHasTokens ? 2 : 0) + (bestHasModel ? 1 : 0);
       return score >= bestScore ? s : best;
     });
 
-    if (!primary) { continue; }
+    if (!primary) {
+      continue;
+    }
 
     const attrs = primary.attributes ?? [];
     const model = String(
-      getAttr(attrs, "gen_ai.response.model")
-      ?? getAttr(attrs, "gen_ai.request.model")
-      ?? getAttr(attrs, "llm.response.model")
-      ?? getAttr(attrs, "llm.request.model")
-      ?? "unknown"
+      getAttr(attrs, "gen_ai.response.model") ??
+        getAttr(attrs, "gen_ai.request.model") ??
+        getAttr(attrs, "llm.response.model") ??
+        getAttr(attrs, "llm.request.model") ??
+        "unknown"
     );
 
     let promptTokens = Number(
-      getAttr(attrs, "gen_ai.usage.prompt_tokens")
-      ?? getAttr(attrs, "llm.usage.prompt_tokens")
-      ?? getAttr(attrs, "gen_ai.usage.input_tokens")
-      ?? 0
+      getAttr(attrs, "gen_ai.usage.prompt_tokens") ??
+        getAttr(attrs, "llm.usage.prompt_tokens") ??
+        getAttr(attrs, "gen_ai.usage.input_tokens") ??
+        0
     );
 
     let completionTokens = Number(
-      getAttr(attrs, "gen_ai.usage.completion_tokens")
-      ?? getAttr(attrs, "llm.usage.completion_tokens")
-      ?? getAttr(attrs, "gen_ai.usage.output_tokens")
-      ?? 0
+      getAttr(attrs, "gen_ai.usage.completion_tokens") ??
+        getAttr(attrs, "llm.usage.completion_tokens") ??
+        getAttr(attrs, "gen_ai.usage.output_tokens") ??
+        0
     );
 
     let cachedTokens: unknown = getAttr(attrs, "gen_ai.usage.cache_read.input_tokens");
-    let cacheWriteTokens: unknown = getAttr(attrs, "gen_ai.usage.cache_creation.input_tokens")
-      ?? getAttr(attrs, "cache_creation_input_tokens");
+    let cacheWriteTokens: unknown =
+      getAttr(attrs, "gen_ai.usage.cache_creation.input_tokens") ??
+      getAttr(attrs, "cache_creation_input_tokens");
     let ttft: unknown = getAttr(attrs, "copilot_chat.time_to_first_token");
 
     // Check ALL child spans for any token/timing data missed on the primary span
     for (const span of spans) {
-      if (span === primary) { continue; }
+      if (span === primary) {
+        continue;
+      }
       const ca = span.attributes ?? [];
       if (promptTokens === 0) {
-        const pt = getAttr(ca, "gen_ai.usage.prompt_tokens")
-          ?? getAttr(ca, "gen_ai.usage.input_tokens")
-          ?? getAttr(ca, "llm.usage.prompt_tokens");
-        if (pt !== undefined) { promptTokens = Number(pt); }
+        const pt =
+          getAttr(ca, "gen_ai.usage.prompt_tokens") ??
+          getAttr(ca, "gen_ai.usage.input_tokens") ??
+          getAttr(ca, "llm.usage.prompt_tokens");
+        if (pt !== undefined) {
+          promptTokens = Number(pt);
+        }
       }
       if (completionTokens === 0) {
-        const ct = getAttr(ca, "gen_ai.usage.completion_tokens")
-          ?? getAttr(ca, "gen_ai.usage.output_tokens")
-          ?? getAttr(ca, "llm.usage.completion_tokens");
-        if (ct !== undefined) { completionTokens = Number(ct); }
+        const ct =
+          getAttr(ca, "gen_ai.usage.completion_tokens") ??
+          getAttr(ca, "gen_ai.usage.output_tokens") ??
+          getAttr(ca, "llm.usage.completion_tokens");
+        if (ct !== undefined) {
+          completionTokens = Number(ct);
+        }
       }
       if (cachedTokens === undefined) {
         cachedTokens = getAttr(ca, "gen_ai.usage.cache_read.input_tokens");
       }
       if (cacheWriteTokens === undefined) {
-        cacheWriteTokens = getAttr(ca, "gen_ai.usage.cache_creation.input_tokens")
-          ?? getAttr(ca, "cache_creation_input_tokens");
+        cacheWriteTokens =
+          getAttr(ca, "gen_ai.usage.cache_creation.input_tokens") ??
+          getAttr(ca, "cache_creation_input_tokens");
       }
       if (ttft === undefined) {
         ttft = getAttr(ca, "copilot_chat.time_to_first_token");
       }
-      if (promptTokens > 0 && completionTokens > 0 && cachedTokens !== undefined && ttft !== undefined) { break; }
+      if (
+        promptTokens > 0 &&
+        completionTokens > 0 &&
+        cachedTokens !== undefined &&
+        ttft !== undefined
+      ) {
+        break;
+      }
     }
 
     if (!promptTokens && !completionTokens && cachedTokens === undefined && ttft === undefined) {
       const opName = String(getAttr(attrs, "gen_ai.operation.name") ?? "");
       const attrKeys = isArr(attrs)
-        ? attrs.map(a => isObj(a) ? String(a.key ?? "") : "").filter(Boolean).join(",")
+        ? attrs
+            .map(a => (isObj(a) ? String(a.key ?? "") : ""))
+            .filter(Boolean)
+            .join(",")
         : "";
-      log?.(`OTel: skipping trace (model=${model}, op=${opName}, spans=${spans.length}, no token data; keys=[${attrKeys}])`);
+      log?.(
+        `OTel: skipping trace (model=${model}, op=${opName}, spans=${spans.length}, no token data; keys=[${attrKeys}])`
+      );
       continue;
     }
 
@@ -242,9 +292,13 @@ export class OTelReceiver {
   private _port = 0;
   private _log: LogFn = () => {};
 
-  get port(): number { return this._port; }
+  get port(): number {
+    return this._port;
+  }
 
-  set log(fn: LogFn) { this._log = fn; }
+  set log(fn: LogFn) {
+    this._log = fn;
+  }
 
   onStats(listener: StatsListener): void {
     this.listeners.push(listener);
@@ -256,7 +310,16 @@ export class OTelReceiver {
     for (const req of this.requests) {
       const key = req.modelName;
       if (!byModel.has(key)) {
-        byModel.set(key, { model: key, requests: 0, prompt: 0, completion: 0, traceCached: 0, metricCached: 0, cached: 0, cacheWrite: 0 });
+        byModel.set(key, {
+          model: key,
+          requests: 0,
+          prompt: 0,
+          completion: 0,
+          traceCached: 0,
+          metricCached: 0,
+          cached: 0,
+          cacheWrite: 0,
+        });
       }
       const m = byModel.get(key)!;
       m.requests++;
@@ -269,7 +332,16 @@ export class OTelReceiver {
     // Add metric cache deltas
     for (const [model, delta] of this.metricDeltas) {
       if (!byModel.has(model)) {
-        byModel.set(model, { model, requests: 0, prompt: 0, completion: 0, traceCached: 0, metricCached: 0, cached: 0, cacheWrite: 0 });
+        byModel.set(model, {
+          model,
+          requests: 0,
+          prompt: 0,
+          completion: 0,
+          traceCached: 0,
+          metricCached: 0,
+          cached: 0,
+          cacheWrite: 0,
+        });
       }
       byModel.get(model)!.metricCached = delta;
     }
@@ -299,42 +371,67 @@ export class OTelReceiver {
 
   private processMetrics(payload: unknown): number {
     let inserted = 0;
-    if (!isObj(payload)) { return 0; }
+    if (!isObj(payload)) {
+      return 0;
+    }
 
     const resourceMetrics = payload.resourceMetrics;
-    if (!isArr(resourceMetrics)) { return 0; }
+    if (!isArr(resourceMetrics)) {
+      return 0;
+    }
 
     for (const rm of resourceMetrics) {
-      if (!isObj(rm)) { continue; }
+      if (!isObj(rm)) {
+        continue;
+      }
       const scopeMetrics = rm.scopeMetrics;
-      if (!isArr(scopeMetrics)) { continue; }
+      if (!isArr(scopeMetrics)) {
+        continue;
+      }
       for (const sm of scopeMetrics) {
-        if (!isObj(sm)) { continue; }
+        if (!isObj(sm)) {
+          continue;
+        }
         const metrics = sm.metrics;
-        if (!isArr(metrics)) { continue; }
+        if (!isArr(metrics)) {
+          continue;
+        }
         for (const metric of metrics) {
-          if (!isObj(metric) || metric.name !== "gen_ai.client.token.usage") { continue; }
+          if (!isObj(metric) || metric.name !== "gen_ai.client.token.usage") {
+            continue;
+          }
 
           const histogram = isObj(metric.histogram) ? metric.histogram : undefined;
           const sum = isObj(metric.sum) ? metric.sum : undefined;
-          const points = isArr(histogram?.dataPoints) ? histogram.dataPoints
-            : isArr(sum?.dataPoints) ? sum.dataPoints : [];
-          if (!isArr(points)) { continue; }
+          const points = isArr(histogram?.dataPoints)
+            ? histogram.dataPoints
+            : isArr(sum?.dataPoints)
+              ? sum.dataPoints
+              : [];
+          if (!isArr(points)) {
+            continue;
+          }
 
           for (const point of points) {
-            if (!isObj(point)) { continue; }
+            if (!isObj(point)) {
+              continue;
+            }
             const attrs = point.attributes ?? [];
             const tokenType = String(getAttr(attrs, "gen_ai.token.type") ?? "");
             const model = String(
-              getAttr(attrs, "gen_ai.response.model")
-              ?? getAttr(attrs, "gen_ai.request.model")
-              ?? "unknown"
+              getAttr(attrs, "gen_ai.response.model") ??
+                getAttr(attrs, "gen_ai.request.model") ??
+                "unknown"
             );
 
-            if (!tokenType.toLowerCase().includes("cache")) { continue; }
+            if (!tokenType.toLowerCase().includes("cache")) {
+              continue;
+            }
 
             const cumSum = point.sum ?? point.asDouble ?? point.asInt;
-            if (cumSum === undefined || cumSum === null) { continue; }
+            if (cumSum === undefined || cumSum === null) {
+              continue;
+            }
 
             const key = `gen_ai.client.token.usage:${model}:${tokenType}`;
             const current = Number(cumSum);
@@ -369,7 +466,11 @@ export class OTelReceiver {
   private notify(): void {
     const stats = this.getStats();
     for (const fn of this.listeners) {
-      try { fn(stats); } catch { /* ignore */ }
+      try {
+        fn(stats);
+      } catch {
+        /* ignore */
+      }
     }
   }
 
@@ -397,7 +498,9 @@ export class OTelReceiver {
       // Try JSON first, then attempt protobuf-like detection
       const isProtobuf = contentType.includes("protobuf") || contentType.includes("proto");
       if (isProtobuf) {
-        this._log(`OTel: received protobuf content-type (${contentType}), cannot parse — Copilot is sending protobuf instead of JSON`);
+        this._log(
+          `OTel: received protobuf content-type (${contentType}), cannot parse — Copilot is sending protobuf instead of JSON`
+        );
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true, note: "protobuf not supported, use JSON" }));
         return;
@@ -407,7 +510,9 @@ export class OTelReceiver {
       } catch {
         const firstByte = body[0];
         if (firstByte !== 0x7b /* '{' */) {
-          this._log(`OTel: body is not JSON (first byte=0x${firstByte?.toString(16)}), likely protobuf binary`);
+          this._log(
+            `OTel: body is not JSON (first byte=0x${firstByte?.toString(16)}), likely protobuf binary`
+          );
         }
         res.writeHead(400, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "invalid JSON" }));
@@ -440,7 +545,9 @@ export class OTelReceiver {
 
     if (req.url === "/v1/metrics") {
       const inserted = this.processMetrics(payload);
-      if (inserted > 0) { this.notify(); }
+      if (inserted > 0) {
+        this.notify();
+      }
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: true, inserted }));
       return;
@@ -481,12 +588,18 @@ export class OTelReceiver {
       this.server!.listen(p, "127.0.0.1", () => {
         this._port = p;
         // Self-test: verify we can reach our own endpoint
-        http.get(`http://127.0.0.1:${p}/healthz`, (testRes) => {
-          testRes.resume();
-          this._log(`OTel receiver self-test: HTTP ${testRes.statusCode} — server is reachable at 127.0.0.1:${p}`);
-        }).on("error", (err: Error) => {
-          this._log(`OTel receiver self-test FAILED: ${err.message} — receiver may not be reachable`);
-        });
+        http
+          .get(`http://127.0.0.1:${p}/healthz`, testRes => {
+            testRes.resume();
+            this._log(
+              `OTel receiver self-test: HTTP ${testRes.statusCode} — server is reachable at 127.0.0.1:${p}`
+            );
+          })
+          .on("error", (err: Error) => {
+            this._log(
+              `OTel receiver self-test FAILED: ${err.message} — receiver may not be reachable`
+            );
+          });
         resolve(p);
       });
     };
