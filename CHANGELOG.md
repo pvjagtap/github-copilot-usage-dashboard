@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.7] - 2026-06-10
+
+### Fixed
+
+- **Scanner no longer silently returns zero sessions on Linux, macOS, dev containers, WSL, or Remote-SSH.** `getWorkspaceStoragePath` was Windows-only — it joined `process.env.APPDATA ?? ~/AppData/Roaming` with `Code/User/workspaceStorage`, producing a path that does not exist on any non-Windows platform. The dashboard would render but show nothing. Resolver now probes a platform-aware candidate list and picks the first one that exists.
+
+### Added
+
+- **Cross-platform workspaceStorage resolution** — auto-detects across Windows (`%APPDATA%/Code`), macOS (`~/Library/Application Support/Code`), Linux (`~/.config/Code`), VS Code Insiders variants of each, dev container / Remote-SSH / WSL (`~/.vscode-server[-insiders]/data/User/workspaceStorage`), and Portable installs (`$VSCODE_PORTABLE/user-data/User/workspaceStorage`). Builds on community PR [#1](https://github.com/pvjagtap/github-copilot-usage-dashboard/pull/1) by @josteinaj.
+- New setting **`copilotUsage.workspaceStoragePath`** — optional absolute path to point the scanner at a specific install. Useful for forks, portable installs, or running multiple parallel VS Code installations.
+- Env override **`COPILOT_USAGE_WORKSPACE_STORAGE`** — same purpose for tests, CI, and non-VS Code execution.
+- Exported `getWorkspaceStorageCandidates(override?)` from `scanner.ts` so the cross-validation test (`tests/scan-june-workspace.ts`) consumes the same resolver as the runtime.
+
+### Changed
+
+- `getWorkspaceStoragePath` is now `async` and uses `fsp.stat` instead of `fs.existsSync`/`fs.statSync`, matching the "fully async with concurrent file I/O" contract stated in the scanner's file header.
+- When no candidate exists yet, the fallback is platform-appropriate (Windows → `%APPDATA%/Code/...`, macOS → `~/Library/...`, otherwise → `~/.config/Code/...`) instead of unconditionally returning a Linux path.
+- README "Data Sources" section rewritten as a cross-platform table covering all supported layouts plus the new override setting.
+
 ## [1.9.6] - 2026-06-07
 
 ### Fixed
