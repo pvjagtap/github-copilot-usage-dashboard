@@ -604,8 +604,13 @@ function buildCreditCalendar(cycleStart, cycleEnd, dayMap) {
     totalMonth += cr;
   }
 
-  // Today marker
-  const todayStr = new Date().toISOString().slice(0, 10);
+  // Today marker — use LOCAL Y-M-D so it matches the cycle/calendar dates,
+  // which are now serialized in local time (issue #2). Using toISOString()
+  // here would re-introduce the off-by-one for users east of UTC.
+  const _now = new Date();
+  const todayStr = _now.getFullYear() + '-'
+    + String(_now.getMonth() + 1).padStart(2, '0') + '-'
+    + String(_now.getDate()).padStart(2, '0');
 
   // Build grid: 7 columns (Mon-Sun), enough rows for the month
   const dayHeaders = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];

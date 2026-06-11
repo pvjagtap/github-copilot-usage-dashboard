@@ -502,19 +502,49 @@ export class AICCalculator {
     const msRemaining = cycleEnd.getTime() - now.getTime();
     const daysRemaining = Math.max(0, Math.ceil(msRemaining / (24 * 60 * 60 * 1000)));
 
+    // Serialize using LOCAL year/month/day, not UTC. The cycle is anchored to
+    // the user's local calendar (billingCycleStartDay is a local day-of-month),
+    // so converting via toISOString() shifts the date one day earlier for
+    // positive UTC offsets (e.g. UTC+05:30 turns local Jun 1 00:00 into UTC
+    // May 31 18:30, then slice(0,10) yields "2026-05-31"). See issue #2.
     return {
-      start: cycleStart.toISOString().slice(0, 10),
-      end: cycleEnd.toISOString().slice(0, 10),
+      start: formatLocalYMD(cycleStart),
+      end: formatLocalYMD(cycleEnd),
       daysRemaining,
     };
   }
 
   private _getDaysElapsed(cycleStart: string): number {
-    const start = new Date(cycleStart);
+    // Parse YYYY-MM-DD as LOCAL midnight, not UTC midnight. `new Date("YYYY-MM-DD")`
+    // is interpreted as UTC per ECMA-262, which skews elapsed-day math by one
+    // for users west of UTC and (combined with `now` in local time) by up to
+    // a day for users east of UTC.
+    const start = parseLocalYMD(cycleStart);
     const now = new Date();
     const elapsed = now.getTime() - start.getTime();
     return Math.max(1, Math.ceil(elapsed / (24 * 60 * 60 * 1000)));
   }
+}
+
+// ─── Local-date helpers (timezone-safe) ────────────────────────────────
+// These intentionally avoid `toISOString()` so the produced string reflects
+// the user's local calendar day. Used for billing-cycle labels, calendar
+// headers, and any "today marker" that must match what the user sees on a
+// wall clock — never for serializing UTC instants.
+
+function formatLocalYMD(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function parseLocalYMD(ymd: string): Date {
+  // Expect strict "YYYY-MM-DD". Fall back to native parsing for anything else
+  // (e.g. full ISO timestamps) so this stays a drop-in replacement.
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+  if (!m) { return new Date(ymd); }
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
 }
 
 // ─── Serialization helpers for VS Code settings ───────────────
