@@ -425,9 +425,14 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
       let requests = 0;
       let prompt = 0;
       let completion = 0;
+      let cached = 0;
       let lastSeen = "";
       let sessionAIC = 0;
-      let lastRequestAIC = 0;
+      // Pick the most-recent-timestamp turn for lastRequestAIC. scan.turns is
+      // not timestamp-sorted (it's append-order across sessions + synthetic
+      // debug-log turns), so a naive "last iterated" pick was order-dependent
+      // and could appear frozen on refresh while sessionAIC kept growing.
+      let mostRecentTurn: Turn | undefined;
 
       for (const turn of debugTurnsToday) {
         const model = turn.modelFamily || "unknown";
@@ -436,23 +441,48 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
         }
         const row = byModelMap.get(model)!;
         const turnRequests = Math.max(1, turn.debugLlmCalls || 0);
+        const turnCached = turn.debugCachedTokens || 0;
         requests += turnRequests;
         prompt += turn.debugPromptTokens;
         completion += turn.debugOutputTokens;
+        cached += turnCached;
         row.requests += turnRequests;
         row.prompt += turn.debugPromptTokens;
         row.completion += turn.debugOutputTokens;
+        // Surface cache-read tokens under traceCached so the per-model breakdown
+        // matches the OTel column layout (Trace Cache / Metric Cache / Effective).
+        row.traceCached += turnCached;
+        row.cached += turnCached;
         if (turn.timestamp > lastSeen) {
           lastSeen = turn.timestamp;
         }
-        // Compute AIC per turn
+        if (!mostRecentTurn || turn.timestamp > mostRecentTurn.timestamp) {
+          mostRecentTurn = turn;
+        }
+        // sessionAIC: prefer exact billed AIC from copilotUsageNanoAiu when
+        // available, otherwise compute from rates using gross input (the
+        // calculator subtracts cachedTokens internally to apply the discounted
+        // cache-read rate).
         if (turn.debugAicCredits > 0) {
           sessionAIC += turn.debugAicCredits;
-          lastRequestAIC = turn.debugAicCredits;
         } else {
-          const usage = calculator.calculateCredits(model, turn.debugPromptTokens, turn.debugOutputTokens, 0);
+          const usage = calculator.calculateCredits(model, turn.debugPromptTokens, turn.debugOutputTokens, turnCached);
           sessionAIC += usage.totalCredits;
-          lastRequestAIC = usage.totalCredits;
+        }
+      }
+
+      let lastRequestAIC = 0;
+      if (mostRecentTurn) {
+        if (mostRecentTurn.debugAicCredits > 0) {
+          lastRequestAIC = mostRecentTurn.debugAicCredits;
+        } else {
+          const lrUsage = calculator.calculateCredits(
+            mostRecentTurn.modelFamily || "unknown",
+            mostRecentTurn.debugPromptTokens,
+            mostRecentTurn.debugOutputTokens,
+            mostRecentTurn.debugCachedTokens || 0,
+          );
+          lastRequestAIC = lrUsage.totalCredits;
         }
       }
 
@@ -460,8 +490,8 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
         requests,
         prompt,
         completion,
-        cached: 0,
-        traceCached: 0,
+        cached,
+        traceCached: cached,
         metricCached: 0,
         lastSeen,
         source: "debug-log",

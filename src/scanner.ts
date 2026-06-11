@@ -58,6 +58,8 @@ export interface Turn {
   debugPromptTokens: number;
   /** Actual cumulative output tokens from debug-logs. */
   debugOutputTokens: number;
+  /** Cumulative cached (cache-read) tokens from debug-logs. 0 if not reported. */
+  debugCachedTokens: number;
   /** Number of LLM API calls seen in debug-logs for this turn. */
   debugLlmCalls: number;
   /** Actual AI credits for this turn from API responses (nano-AIU / 1e9). 0 if not available. */
@@ -199,6 +201,7 @@ function emitTurnAndToolCalls(
     outputTokens: num(meta, "outputTokens"),
     debugPromptTokens: 0,
     debugOutputTokens: 0,
+    debugCachedTokens: 0,
     debugLlmCalls: 0,
     debugAicCredits: 0,
     toolCallRounds: isArr(meta.toolCallRounds) ? meta.toolCallRounds.length : 0,
@@ -373,6 +376,7 @@ function parseSessionContent(content: string, filePath: string, wsHash: string, 
                 outputTokens: 0,
                 debugPromptTokens: 0,
                 debugOutputTokens: 0,
+                debugCachedTokens: 0,
                 debugLlmCalls: 0,
                 debugAicCredits: 0,
                 toolCallRounds: 0,
@@ -727,6 +731,8 @@ interface DebugLogTurnTokens {
   turnIndex: number;
   promptTotal: number;
   outputTotal: number;
+  /** Sum of cache-read tokens for all LLM calls in this turn (attrs.cachedTokens). */
+  cachedTotal: number;
   llmCalls: number;
   /** Epoch ms timestamp from turn_start event */
   timestamp: number;
@@ -790,13 +796,18 @@ function parseDebugLogLines(content: string): ParsedDebugLog | null {
       currentTurn = Number.isNaN(parsed) ? currentTurn + 1 : parsed;
       if (!turnMap.has(currentTurn)) {
         const ts = typeof entry.ts === "number" ? entry.ts : 0;
-        turnMap.set(currentTurn, { turnIndex: currentTurn, promptTotal: 0, outputTotal: 0, llmCalls: 0, timestamp: ts, nanoAiu: 0 });
+        turnMap.set(currentTurn, { turnIndex: currentTurn, promptTotal: 0, outputTotal: 0, cachedTotal: 0, llmCalls: 0, timestamp: ts, nanoAiu: 0 });
       }
     } else if (type === "llm_request") {
       const attrs = entry.attrs;
       if (!isObj(attrs)) { continue; }
       const inp = typeof attrs.inputTokens === "number" ? attrs.inputTokens : 0;
       const out = typeof attrs.outputTokens === "number" ? attrs.outputTokens : 0;
+      // cache-read tokens: present on Anthropic Opus/Sonnet traces as `cachedTokens`.
+      // When absent the field is undefined; default to 0. Used by the debug-log
+      // fallback path in dashboardData.ts so the dashboard's LIVE CACHED / TRACE
+      // CACHE cells stop showing 0 when OTLP is unavailable.
+      const cached = typeof attrs.cachedTokens === "number" ? attrs.cachedTokens : 0;
       const nanoAiu = typeof attrs.copilotUsageNanoAiu === "number" ? attrs.copilotUsageNanoAiu : 0;
       totalPrompt += inp;
       totalOutput += out;
@@ -805,11 +816,12 @@ function parseDebugLogLines(content: string): ParsedDebugLog | null {
 
       if (currentTurn >= 0) {
         if (!turnMap.has(currentTurn)) {
-          turnMap.set(currentTurn, { turnIndex: currentTurn, promptTotal: 0, outputTotal: 0, llmCalls: 0, timestamp: 0, nanoAiu: 0 });
+          turnMap.set(currentTurn, { turnIndex: currentTurn, promptTotal: 0, outputTotal: 0, cachedTotal: 0, llmCalls: 0, timestamp: 0, nanoAiu: 0 });
         }
         const t = turnMap.get(currentTurn)!;
         t.promptTotal += inp;
         t.outputTotal += out;
+        t.cachedTotal += cached;
         t.nanoAiu += nanoAiu;
         t.llmCalls++;
       }
@@ -1053,6 +1065,7 @@ export async function scanWorkspaceStorage(workspaceStorageOverride?: string): P
         for (const t of matchingTurns) {
           t.debugPromptTokens = dt.promptTotal;
           t.debugOutputTokens = dt.outputTotal;
+          t.debugCachedTokens = dt.cachedTotal;
           t.debugLlmCalls = dt.llmCalls;
           t.debugAicCredits = dt.nanoAiu / 1_000_000_000;
         }
@@ -1068,6 +1081,7 @@ export async function scanWorkspaceStorage(workspaceStorageOverride?: string): P
           outputTokens: 0,
           debugPromptTokens: dt.promptTotal,
           debugOutputTokens: dt.outputTotal,
+          debugCachedTokens: dt.cachedTotal,
           debugLlmCalls: dt.llmCalls,
           debugAicCredits: dt.nanoAiu / 1_000_000_000,
           toolCallRounds: dt.llmCalls > 1 ? dt.llmCalls - 1 : 0,
