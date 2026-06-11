@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.9] - 2026-06-10
+
+### Fixed
+
+- **Calendar heatmap month header now matches the user's local calendar** ([#2](https://github.com/pvjagtap/github-copilot-usage-dashboard/issues/2)). For users in timezones east of UTC (e.g. IST / UTC+05:30), the "Daily Credits" calendar could render the previous month — e.g. `May 2026` on June 10 local — even with `billingCycleStartDay = 1`. Root cause: `_getBillingCycle()` in `aicCredits.ts` built `cycleStart` / `cycleEnd` in local time but serialized them with `toISOString().slice(0, 10)` (UTC), shifting June 1 00:00 IST back to `2026-05-31`. The webview then derived the calendar header from that shifted string.
+  - Added local-date helpers (`formatLocalYMD` / `parseLocalYMD`) in `aicCredits.ts`; `_getBillingCycle` and `_getDaysElapsed` now serialize / parse in the user's local calendar.
+  - The today-marker in `buildCreditCalendar` (`dashboardPanel.ts`) now also uses local `YYYY-MM-DD` so day comparisons stay consistent with the cycle dates.
+  - New regression test `tests/issue-2-calendar-tz.ts` pins `TZ=Asia/Kolkata`, freezes `Date.now()` to 2026-06-10 IST, drives the real `AICCalculator`, and asserts the cycle start is `2026-06-01` and the calendar header is `June 2026`.
+
 ## [1.9.8] - 2026-06-10
 
 ### Changed
