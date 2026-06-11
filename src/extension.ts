@@ -1,8 +1,9 @@
 import * as vscode from "vscode";
+import * as fs from "fs";
 import { OTelReceiver } from "./otelReceiver";
 import { StatusBarProvider, CurrentSessionInfo } from "./statusBar";
 import { DashboardPanel } from "./dashboardPanel";
-import { scanWorkspaceStorage, ScanResult } from "./scanner";
+import { scanWorkspaceStorage, ScanResult, getWorkspaceStoragePath } from "./scanner";
 import { scanAgentSessions, AgentScanResult } from "./agentScanner";
 import { buildDashboardData, DashboardData } from "./dashboardData";
 import { AICConfig, DEFAULT_AIC_CONFIG, createCalculatorFromConfig } from "./aicCredits";
@@ -27,6 +28,16 @@ let scanTimer: ReturnType<typeof setInterval> | undefined;
 let lastScan: ScanResult | undefined;
 let lastAgentScan: AgentScanResult | undefined;
 let output: vscode.OutputChannel;
+/**
+ * fs.watch on workspaceStorage to catch `main.jsonl` writes in real time.
+ * When another VS Code window owns OTLP port 14318, this window's receiver
+ * gets no events — but Copilot still writes the exact API-billed
+ * `copilotUsageNanoAiu` to `<wsRoot>/<wsId>/GitHub.copilot-chat/debug-logs/<sid>/main.jsonl`.
+ * Watching for those writes lets us refresh within ~1-2s of any new request
+ * instead of waiting up to 120s for the periodic timer.
+ */
+let debugLogWatcher: fs.FSWatcher | undefined;
+let debugLogDebounceTimer: ReturnType<typeof setTimeout> | undefined;
 /** ISO timestamp of when this VS Code instance activated the extension — used to scope "current" to this instance only */
 let activationTime: string;
 /** Cached dashboard data — invalidated when scan or OTel changes */
@@ -421,6 +432,74 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     },
   });
+
+  // Live debug-log file watcher. The debug-logs directory contains
+  // `main.jsonl` files that Copilot appends to in real time with API-exact
+  // `copilotUsageNanoAiu`. By watching it directly we make the dashboard live
+  // even when another VS Code window owns the OTLP receiver port (only one
+  // extension instance can bind port 14318 at a time).
+  void setupDebugLogWatcher();
+  context.subscriptions.push({
+    dispose: () => {
+      if (debugLogDebounceTimer) {
+        clearTimeout(debugLogDebounceTimer);
+        debugLogDebounceTimer = undefined;
+      }
+      if (debugLogWatcher) {
+        try {
+          debugLogWatcher.close();
+        } catch {
+          /* ignore */
+        }
+        debugLogWatcher = undefined;
+      }
+    },
+  });
+}
+
+/**
+ * Set up a recursive `fs.watch` on workspaceStorage that triggers a debounced
+ * rescan whenever a `main.jsonl` file changes. Failure is non-fatal — the
+ * periodic timer still provides eventual consistency.
+ */
+async function setupDebugLogWatcher(): Promise<void> {
+  try {
+    const wsOverride = vscode.workspace
+      .getConfiguration("copilotUsage")
+      .get<string>("workspaceStoragePath", "")
+      .trim();
+    const wsRoot = await getWorkspaceStoragePath(wsOverride || undefined);
+    if (!wsRoot) {
+      return;
+    }
+
+    // recursive:true is supported on Windows + macOS natively and on Linux
+    // since Node 20. Wrapped in try/catch so older runtimes degrade silently.
+    debugLogWatcher = fs.watch(wsRoot, { recursive: true }, (_event, filename) => {
+      if (!filename || !filename.toString().endsWith("main.jsonl")) {
+        return;
+      }
+      if (debugLogDebounceTimer) {
+        return;
+      }
+      // Same 2s debounce as the OTel path — collapses bursts of writes from
+      // a single in-flight request into a single rescan.
+      debugLogDebounceTimer = setTimeout(() => {
+        debugLogDebounceTimer = undefined;
+        void runScan().then(() => {
+          updateStatusBar();
+          DashboardPanel.updateIfVisible(buildData());
+        });
+      }, OTEL_DEBOUNCE_MS);
+    });
+
+    debugLogWatcher.on("error", err => {
+      output.appendLine(`debug-log watcher error (non-fatal): ${err}`);
+    });
+    output.appendLine(`Watching debug-logs under ${wsRoot} for real-time updates`);
+  } catch (err) {
+    output.appendLine(`debug-log watcher setup failed (non-fatal): ${err}`);
+  }
 }
 
 function updateStatusBar(): void {

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.12] - 2026-06-10
+
+### Added
+
+- **Real-time `main.jsonl` file watcher.** The extension now sets up a recursive `fs.watch` on the workspaceStorage root and triggers a debounced rescan whenever any `<wsRoot>/<wsId>/GitHub.copilot-chat/debug-logs/<sid>/main.jsonl` is written. This makes the dashboard live within ~1–2 seconds of every Copilot request — even in the secondary window that doesn't own OTLP port 14318. Replaces the previous behaviour where this window could be up to 120 seconds behind.
+
+### Changed
+
+- **Rebranded the debug-log path.** When the OTLP receiver port is held by another VS Code window, the Live OpenTelemetry panel previously labeled itself `Local debug-log fallback` with a note implying degraded data. In reality `main.jsonl` carries the API-exact `copilotUsageNanoAiu` — the same value the API bills you for. New label: `Live (debug-log stream • API-exact)` with a note that explains it's authoritative, not a fallback.
+
 ## [1.9.11] - 2026-06-10
 
 ### Fixed
@@ -21,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Debug-log fallback now surfaces cache-read tokens.** When OTLP export is unavailable, the *Live OpenTelemetry* panel was hard-coding `LIVE CACHED`, `TRACE CACHE`, and `METRIC CACHE` to `0` even though `attrs.cachedTokens` is present on Anthropic Opus/Sonnet `llm_request` entries in `main.jsonl`. The scanner now reads it (`Turn.debugCachedTokens`), the fallback path sums it into `live.cached` / `live.traceCached`, and the per-model breakdown reports it under *Trace Cache*. Subtitle updated.
+- **Debug-log fallback now surfaces cache-read tokens.** When OTLP export is unavailable, the _Live OpenTelemetry_ panel was hard-coding `LIVE CACHED`, `TRACE CACHE`, and `METRIC CACHE` to `0` even though `attrs.cachedTokens` is present on Anthropic Opus/Sonnet `llm_request` entries in `main.jsonl`. The scanner now reads it (`Turn.debugCachedTokens`), the fallback path sums it into `live.cached` / `live.traceCached`, and the per-model breakdown reports it under _Trace Cache_. Subtitle updated.
 - **AIC (last req) no longer appears frozen on refresh in the debug-log fallback.** It was previously set to whichever turn happened to be iterated last — `scan.turns` is append-order (across sessions and synthetic debug-log turns), not timestamp-sorted, so the value was order-dependent and could stay the same across refreshes even as new requests came in. It now picks the turn with the most recent timestamp.
 - **AIC computation in the debug-log fallback now passes cache-read tokens to the calculator.** Previously cached tokens were passed as `0`, which silently overestimated AIC for any turn that lacked an exact `copilotUsageNanoAiu` value (cache reads were billed at the full input rate instead of the discounted cache-read rate).
 
