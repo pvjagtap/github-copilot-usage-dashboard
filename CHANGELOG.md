@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.3] - 2026-06-12
+
+### Changed
+
+- **Sidebar layout polish.** Three small fixes to the "Copilot Usage" Activity Bar sidebar:
+  - **`THIS WEEK` KPI no longer overflows the card on narrow widths.** `.kpi-grid` now uses `minmax(0, 1fr) minmax(0, 1fr)` instead of `1fr 1fr` so grid tracks can shrink below their intrinsic content width. `.kpi`, `.kpi .value`, and `.kpi .sub` got `min-width: 0` + `overflow-wrap: anywhere` so long numbers wrap instead of clipping. Below 220px the two KPIs stack vertically. See [src/sidebarView.ts](src/sidebarView.ts).
+  - **Removed the SESSIONS section from the sidebar.** The full dashboard already lists top sessions; mirroring the table in the sidebar was duplicate surface area. Sidebar is now a 2-section accordion (USAGE & PACE + BREAKDOWN). Dropped the `#sec-sessions` panel, the `renderSessions()` webview function, the `openSession` message handler, and the `.sess-head` / `.sess-row` CSS block (~38 lines).
+  - **BREAKDOWN · BY MODEL now lists all models, not just the top 5.** Removed the `.slice(0, 5)` in [src/sidebarSnapshot.ts](src/sidebarSnapshot.ts) so every billable model appears in the sidebar bars. The "+N more in dashboard ⤢" overflow footer disappears naturally (`modelsMore` is always `0`).
+
+## [1.10.2] - 2026-06-12
+
+### Added
+
+- **New "Copilot Usage" Activity Bar sidebar.** A persistent webview view (`copilotUsage.panel`) lives in its own Activity Bar container alongside the full dashboard. Three-section accordion: **USAGE & PACE** (Last Request + Session (this window) side-by-side, Today/Week KPIs, projected-overage Pace card with traffic-light progress bar), **BREAKDOWN** (cycle total, 14-day daily sparkline with peak highlight, top-5 By Model bars with tier chips, By Day of Week bars, Tokens in/out/cache), **SESSIONS** (top 30 by credits with click-through to the full dashboard, active-window glyph). Sections have brighter outer borders so each reads as a distinct card against the side bar background.
+  - New files: [src/sidebarView.ts](src/sidebarView.ts) (`WebviewViewProvider` with strict CSP + per-render nonce, expanded-state persistence via `vscode.setState`), [src/sidebarSnapshot.ts](src/sidebarSnapshot.ts) (pure projection of existing `DashboardData` + scanner turns + live OTel into a slim DTO — zero new computation, all numbers come from the existing pipeline).
+  - Snapshot pushes happen on every status-bar tick, on `webviewView.onDidChangeVisibility`, and on a `ready` ping from the webview script — eliminates the post-before-listener race and avoids stale "Waiting…" placeholders when re-opening the sidebar.
+  - All scanner-driven values respect `activationTime` scoping (same contract as v1.9.16/17), so the sparkline, "Session (this window)", and active-session glyph never leak prior windows' turns.
+  - New commands: `copilotUsage.sidebar.refresh` (toolbar `$(refresh)`) and `copilotUsage.sidebar.openDashboard` (toolbar `$(link-external)`).
+
+### Fixed
+
+- **`Session (this window)` no longer permanently reads `0 min`.** Both branches of `updateStatusBar()` in [src/extension.ts](src/extension.ts) that build `CurrentSessionInfo` were hard-coding `durationMin: 0`, so the sidebar's session card always showed `… · N turns · 0 min`. Added `computeWindowDurationMin()` (minutes since `activationTime`) and wired both branches to it. Status-bar consumers were unaffected — they never read the field.
+
+### Changed
+
+- **`AIC_EFFECTIVE_DATE = "2026-06-01"` is now exported from [src/dashboardData.ts](src/dashboardData.ts).** Was duplicated as three separate string literals (`dashboardData.ts`, `extension.ts`, the new `sidebarSnapshot.ts`); `aicCredits.ts` keeps its `PROMO_START` since that's a semantically different date. Per the `.agents/agents.md` "three consumers must stay in sync" contract, consolidating to a single import removes one drift surface.
+
 ## [1.9.21] - 2026-06-11
 
 ### Fixed
@@ -492,7 +519,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Status bar with session count and token totals
 - Multi-root workspace support
 
-[Unreleased]: https://github.com/pvjagtap/github-copilot-usage-dashboard/compare/v1.5.8...HEAD
+[Unreleased]: https://github.com/pvjagtap/github-copilot-usage-dashboard/compare/v1.10.2...HEAD
+[1.10.2]: https://github.com/pvjagtap/github-copilot-usage-dashboard/compare/v1.9.21...v1.10.2
+[1.9.21]: https://github.com/pvjagtap/github-copilot-usage-dashboard/compare/v1.5.8...v1.9.21
 [1.5.8]: https://github.com/pvjagtap/github-copilot-usage-dashboard/compare/v1.5.7...v1.5.8
 [1.5.7]: https://github.com/pvjagtap/github-copilot-usage-dashboard/compare/v1.5.5...v1.5.7
 [1.5.5]: https://github.com/pvjagtap/github-copilot-usage-dashboard/compare/v1.5.4...v1.5.5
@@ -510,3 +539,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.1.4]: https://github.com/pvjagtap/github-copilot-usage-dashboard/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/pvjagtap/github-copilot-usage-dashboard/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/pvjagtap/github-copilot-usage-dashboard/releases/tag/v0.1.2
+

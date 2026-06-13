@@ -5,7 +5,9 @@ import { StatusBarProvider, CurrentSessionInfo } from "./statusBar";
 import { DashboardPanel } from "./dashboardPanel";
 import { scanWorkspaceStorage, ScanResult, getWorkspaceStoragePath } from "./scanner";
 import { scanAgentSessions, AgentScanResult } from "./agentScanner";
-import { buildDashboardData, DashboardData } from "./dashboardData";
+import { buildDashboardData, DashboardData, AIC_EFFECTIVE_DATE } from "./dashboardData";
+import { SidebarViewProvider } from "./sidebarView";
+import { buildSidebarSnapshot } from "./sidebarSnapshot";
 import { AICConfig, DEFAULT_AIC_CONFIG, createCalculatorFromConfig } from "./aicCredits";
 import {
   DailyLimitTracker,
@@ -30,6 +32,12 @@ const OTEL_DEBOUNCE_MS = 2_000;
 
 let receiver: OTelReceiver | undefined;
 let statusBar: StatusBarProvider | undefined;
+let sidebarProvider: SidebarViewProvider | undefined;
+/** Latest CurrentSessionInfo produced by updateStatusBar(), reused by the
+ *  sidebar for metadata (model name / turn count / duration). The credit
+ *  values themselves are sourced from dashData.liveOtel in pushSidebarSnapshot
+ *  so the sidebar and dashboard never drift. */
+let lastCurrentSession: CurrentSessionInfo | null = null;
 let scanTimer: ReturnType<typeof setInterval> | undefined;
 let lastScan: ScanResult | undefined;
 let lastAgentScan: AgentScanResult | undefined;
@@ -248,6 +256,39 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Status bar
   statusBar = new StatusBarProvider("copilotUsage.openDashboard");
   context.subscriptions.push({ dispose: () => statusBar?.dispose() });
+
+  // ── Sidebar (Activity Bar) ─────────────────────────────────
+  sidebarProvider = new SidebarViewProvider(context.extensionUri);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(SidebarViewProvider.viewType, sidebarProvider, {
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
+    vscode.commands.registerCommand("copilotUsage.sidebar.refresh", async () => {
+      // Use the serialized wrapper so a manual refresh racing with the
+      // debug-log watcher never triggers two concurrent scans (they would
+      // race on the mtime cache). runScanSerialized() also handles
+      // updateStatusBar + DashboardPanel.updateIfVisible internally.
+      await runScanSerialized();
+    }),
+    vscode.commands.registerCommand("copilotUsage.sidebar.openDashboard", () => {
+      DashboardPanel.show(context.extensionUri, buildData());
+    })
+  );
+  // Session click → open the full dashboard. The dashboard does not yet
+  // support deep-linking to a specific session, so the `sessionId` payload
+  // is accepted but unused (logged for traceability). When per-session
+  // focus lands in DashboardPanel.show, wire it through here.
+  sidebarProvider.setOnSessionOpen((sessionId: string) => {
+    if (sessionId) {
+      output.appendLine(`Sidebar session click → opening dashboard (sessionId=${sessionId})`);
+    }
+    DashboardPanel.show(context.extensionUri, buildData());
+  });
+  // First open (or re-show) → push a fresh snapshot immediately so the user
+  // never sees stale "Waiting…" placeholders when scan/OTel data already exists.
+  sidebarProvider.setOnReady(() => {
+    pushSidebarSnapshot();
+  });
 
   // ── Daily limit subsystem ──────────────────────────────────
   limitTracker = new DailyLimitTracker(context);
@@ -556,6 +597,15 @@ async function runScanSerialized(): Promise<void> {
   }
 }
 
+/** Minutes elapsed since this VS Code window's extension activated. */
+function computeWindowDurationMin(): number {
+  if (!activationTime) {
+    return 0;
+  }
+  const ms = Date.now() - new Date(activationTime).getTime();
+  return Math.max(0, Math.round(ms / 60_000));
+}
+
 function updateStatusBar(): void {
   if (!statusBar) {
     return;
@@ -568,7 +618,7 @@ function updateStatusBar(): void {
 
   const aicConfig = getAICConfig();
   const calculator = createCalculatorFromConfig(aicConfig);
-  const AIC_START = "2026-06-01";
+  const AIC_START = AIC_EFFECTIVE_DATE;
 
   // When live OTel is active it is already scoped to this VS Code instance (in-memory).
   // Compute AIC from OTel directly — no scanner needed for "current".
@@ -633,7 +683,7 @@ function updateStatusBar(): void {
       prompt: otelPrompt,
       output: otelOutput,
       toolCalls: 0,
-      durationMin: 0,
+      durationMin: computeWindowDurationMin(),
       aicCredits: currentSessionAIC,
     };
   } else if (lastScan && lastScan.turns.length > 0) {
@@ -682,7 +732,7 @@ function updateStatusBar(): void {
         prompt: instancePrompt,
         output: instanceOutput,
         toolCalls: 0,
-        durationMin: 0,
+        durationMin: computeWindowDurationMin(),
         aicCredits: currentSessionAIC,
       };
     }
@@ -747,6 +797,49 @@ function updateStatusBar(): void {
     lastRequestAIC,
     dailyLimit: computeAndPushDailyLimit(calculator),
   });
+
+  // Stash current-session metadata for the sidebar (model / turns / duration).
+  // The sidebar's AIC numbers themselves are read from dashData.liveOtel in
+  // pushSidebarSnapshot() so they always match the dashboard widgets.
+  lastCurrentSession = currentSession;
+  pushSidebarSnapshot();
+}
+
+/** Build + post the latest SidebarSnapshot using whatever data we already have. */
+function pushSidebarSnapshot(): void {
+  if (!sidebarProvider) {
+    return;
+  }
+  try {
+    const dashData = buildData();
+    // SESSION-AIC SOURCE OF TRUTH: read from `dashData.liveOtel.sessionAIC`
+    // and `dashData.liveOtel.lastRequestAIC` — NOT from the status-bar's
+    // independent reimplementation cached in `lastCurrentSessionAIC` /
+    // `lastRequestAICCached`. Per .agents/agents.md, the status-bar logic
+    // and the dashboard liveOtel logic are independent reimplementations
+    // that have drifted before (v1.9.17 regression: status bar said 8025.8
+    // AIC while dashboard said 111.2 — and again in the wild during 1.10.2
+    // testing where the sidebar showed 214.1 vs the dashboard's 129.3 for
+    // the same window). Sourcing the sidebar from `dashData.liveOtel`
+    // guarantees the sidebar and the dashboard widgets always agree.
+    //
+    // currentSessionModel / Turns / DurationMin are pure metadata (no
+    // credit math) so they can keep coming from the status-bar helper.
+    const snap = buildSidebarSnapshot({
+      dashData,
+      scanTurns: lastScan?.turns ?? [],
+      liveStats: receiver?.getStats() ?? null,
+      lastRequestAIC: dashData.liveOtel.lastRequestAIC,
+      currentSessionAIC: dashData.liveOtel.sessionAIC,
+      currentSessionModel: lastCurrentSession?.model ?? null,
+      currentSessionTurns: lastCurrentSession?.turns ?? 0,
+      currentSessionDurationMin: lastCurrentSession?.durationMin ?? 0,
+      activationTime,
+    });
+    sidebarProvider.postSnapshot(snap);
+  } catch (err) {
+    output?.appendLine(`Sidebar snapshot build failed (non-fatal): ${err}`);
+  }
 }
 
 function computeAndPushDailyLimit(calculator: ReturnType<typeof createCalculatorFromConfig>) {

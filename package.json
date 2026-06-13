@@ -2,7 +2,7 @@
   "name": "copilot-usage-dashboard",
   "displayName": "Copilot Usage Dashboard",
   "description": "Live token usage dashboard for GitHub Copilot — prompt, output, and cached tokens with full analytics.",
-  "version": "1.9.21",
+  "version": "1.10.3",
   "publisher": "pvjagtap",
   "icon": "images/icon.png",
   "license": "MIT",
@@ -71,8 +71,54 @@
       {
         "command": "copilotUsage.aic.detectPlan",
         "title": "Copilot Usage: Detect My Copilot Plan"
+      },
+      {
+        "command": "copilotUsage.sidebar.refresh",
+        "title": "Refresh",
+        "category": "Copilot Usage",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "copilotUsage.sidebar.openDashboard",
+        "title": "Open Full Dashboard",
+        "category": "Copilot Usage",
+        "icon": "$(link-external)"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "copilotUsage",
+          "title": "Copilot Usage",
+          "icon": "images/sidebar-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "copilotUsage": [
+        {
+          "id": "copilotUsage.panel",
+          "name": "Usage",
+          "type": "webview",
+          "icon": "images/sidebar-icon.svg",
+          "contextualTitle": "Copilot Usage"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "copilotUsage.sidebar.refresh",
+          "when": "view == copilotUsage.panel",
+          "group": "navigation@1"
+        },
+        {
+          "command": "copilotUsage.sidebar.openDashboard",
+          "when": "view == copilotUsage.panel",
+          "group": "navigation@2"
+        }
+      ]
+    },
     "configuration": [
       {
         "title": "Copilot Usage — General",

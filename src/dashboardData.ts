@@ -13,7 +13,7 @@ import { AICCalculator, AICConfig, DEFAULT_AIC_CONFIG, createCalculatorFromConfi
  * are included in AI Credit calculations.
  * GitHub Copilot usage-based billing started June 1, 2026.
  */
-const AIC_EFFECTIVE_DATE = "2026-06-01";
+export const AIC_EFFECTIVE_DATE = "2026-06-01";
 
 // ─── Dashboard Data Types ─────────────────────────────────────
 
