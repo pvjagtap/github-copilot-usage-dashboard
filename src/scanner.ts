@@ -1382,7 +1382,39 @@ export async function scanWorkspaceStorage(workspaceStorageOverride?: string): P
 
     const s = canonical.session as Session;
     sessions.push(s);
-    turns.push(...canonical.turns);
+    // Dedupe canonical.turns by (sessionId, turnIndex). Chat-session files
+    // routinely contain MULTIPLE rows for the same turnIndex — an empty
+    // initial row created at turn-start plus the fully-populated row written
+    // when the turn settles, and sometimes additional rows with mixed
+    // workspaceName values after a workspace rename. Without this dedupe
+    // step the per-(sid,turnIndex) debug-log enrichment loop below attaches
+    // the same debug data (calls/prompt/output/credits) to every duplicate
+    // row, and every downstream consumer that iterates `scan.turns` summing
+    // `debugAicCredits` (dashboardData.aicSummary.totalCredits,
+    // liveOtel.sessionAIC, sidebar breakdown, status bar dollars) silently
+    // double-counts. Verified via tests/verify-no-drift.js — 114 duplicate
+    // keys in the wild produced +704 phantom llm_calls / +1869 phantom
+    // credits across the user's workspace.
+    //
+    // Pick rule: keep the row with the highest filled-in token count
+    // (promptTokens + outputTokens), then by latest timestamp. This biases
+    // toward the "populated" row over an empty initial row while still
+    // being deterministic for ties.
+    const turnByKey = new Map<string, Turn>();
+    for (const t of canonical.turns) {
+      const key = `${t.sessionId}|${t.turnIndex}`;
+      const existing = turnByKey.get(key);
+      if (!existing) {
+        turnByKey.set(key, t);
+        continue;
+      }
+      const eFill = (existing.promptTokens || 0) + (existing.outputTokens || 0);
+      const tFill = (t.promptTokens || 0) + (t.outputTokens || 0);
+      if (tFill > eFill || (tFill === eFill && (t.timestamp || "") > (existing.timestamp || ""))) {
+        turnByKey.set(key, t);
+      }
+    }
+    turns.push(...turnByKey.values());
     toolCalls.push(...canonical.toolCalls);
     subagentsList.push(...canonical.subagents);
 
@@ -1422,8 +1454,19 @@ export async function scanWorkspaceStorage(workspaceStorageOverride?: string): P
             t.debugByModel = Object.fromEntries(dt.byModel);
           }
         }
-      } else if (dt.promptTotal > 0 || dt.outputTotal > 0) {
-        // chatSession hasn't flushed this turn yet — create synthetic turn from debug-log
+      } else if (dt.promptTotal > 0 || dt.outputTotal > 0 || dt.llmCalls > 0) {
+        // chatSession hasn't flushed this turn yet — create synthetic turn from debug-log.
+        //
+        // The `dt.llmCalls > 0` branch covers a real-world edge case verified
+        // via tests/verify-no-drift.js: an `llm_request` with `status:"error"`
+        // (e.g. timeout, abort, server-side failure) has NO `inputTokens` /
+        // `outputTokens` / `copilotUsageNanoAiu` fields. The scanner still
+        // counts it in `dt.llmCalls` (a request *was* made), but
+        // `dt.promptTotal === 0 && dt.outputTotal === 0`. Without the
+        // `llmCalls > 0` predicate, errored calls in turns past the
+        // chat-session's last flushed turn are silently dropped from the
+        // total request count — a -1 per affected session that breaks the
+        // raw-debug-log ↔ scanner.turns parity invariant.
         const ts = dt.timestamp ? new Date(dt.timestamp).toISOString() : s.lastTimestamp || "";
         turns.push({
           sessionId: s.sessionId,

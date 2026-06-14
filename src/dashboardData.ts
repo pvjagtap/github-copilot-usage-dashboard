@@ -360,6 +360,59 @@ function computeAllModels(turns: Turn[]): string[] {
 
 // ─── Build Dashboard Data ─────────────────────────────────────
 
+/**
+ * Per-activation high-water mark for `liveOtel.sessionAIC`.
+ *
+ * Why this exists: the per-model overlay in the OTel branch below replaces
+ * the rate-table estimate with the exact `copilotUsageNanoAiu` value when
+ * the debug log catches up. For models whose OTel traces are missing cache
+ * attributes (notably Anthropic Opus), the rate estimate over-counts, so
+ * when the exact value lands the per-model credits — and therefore
+ * sessionAIC — DROP. v1.10.6 made the dashboard tick on every OTel batch
+ * (not just the debounced 2s scan), so users now see the corrected value
+ * land ~2s after the over-estimate flashes, producing a visible decrease
+ * like 147 → 138 between consecutive requests.
+ *
+ * Session cumulative AIC must be monotonically non-decreasing. We ratchet
+ * to the high-water mark per activation; the per-model breakdown table
+ * still shows the corrected exact values, only the rolled-up
+ * `sessionAIC` number is locked from going backward.
+ *
+ * Keyed by `activationTime` so a window reload resets to zero — a fresh
+ * activation correctly starts a new "session" for this purpose.
+ *
+ * NOTE: this is a per-process cache (lives in the extension host). It is
+ * cleared automatically by the activation-time key change; no explicit
+ * reset call is needed.
+ */
+const _sessionAICRatchet = new Map<string, number>();
+
+/**
+ * Apply the per-activation monotonic ratchet to a candidate sessionAIC value.
+ * Returns max(candidate, previously-seen-max for this activation).
+ *
+ * `activationTime` is the cache key — when it changes (window reload), the
+ * ratchet effectively resets because the new key has no prior entry. We do
+ * not bother to evict stale entries; the map grows by 1 per VS Code window
+ * lifetime, which is bounded and negligible.
+ *
+ * If `activationTime` is unset (e.g. tests or older callers), ratcheting is
+ * disabled and the candidate value passes through unchanged — those call
+ * sites either don't care about live UX (tests) or pre-date the live-tick
+ * path that exposes the flicker.
+ */
+function applySessionAICRatchet(activationTime: string | undefined, candidate: number): number {
+  if (!activationTime) {
+    return candidate;
+  }
+  const prev = _sessionAICRatchet.get(activationTime) ?? 0;
+  const next = candidate > prev ? candidate : prev;
+  if (next !== prev) {
+    _sessionAICRatchet.set(activationTime, next);
+  }
+  return next;
+}
+
 export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null, aicConfig?: AICConfig, agentScan?: AgentScanResult, activationTime?: string): DashboardData {
   // Create AIC calculator early so it can be used in session views
   const config = aicConfig ?? DEFAULT_AIC_CONFIG;
@@ -492,7 +545,7 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
       lastSeen: liveStats.lastSeen,
       source: "otel",
       byModel,
-      sessionAIC: Math.round(sessionAIC * 100) / 100,
+      sessionAIC: applySessionAICRatchet(activationTime, Math.round(sessionAIC * 100) / 100),
       lastRequestAIC: Math.round(lastRequestAIC * 100) / 100,
     };
   } else {
@@ -665,7 +718,7 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
           ...row,
           aicCredits: Math.round(row.aicCredits * 100) / 100,
         })),
-        sessionAIC: Math.round(sessionAIC * 100) / 100,
+        sessionAIC: applySessionAICRatchet(activationTime, Math.round(sessionAIC * 100) / 100),
         lastRequestAIC: Math.round(lastRequestAIC * 100) / 100,
       };
     } else {

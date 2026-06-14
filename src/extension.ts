@@ -406,14 +406,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Initial status bar with scan data
   updateStatusBar();
 
-  // Update status bar and dashboard on new OTel data (debounced to avoid thrashing).
-  // Also re-scan workspace storage so the latest debug-log `copilotUsageNanoAiu`
-  // (exact API-billed AIC) is reflected in the AIC overlays. The scanner uses
-  // mtime caching so re-scans are cheap when only one debug-log file changed.
+  // LIVE PATH (cheap): on every OTel batch arrival, immediately refresh all
+  // three consumers — status bar, sidebar, dashboard panel. These read from
+  // in-memory OTel + the already-cached scan, so they cost ~ms. Holding them
+  // behind the 2-second scan debounce (as v1.10.4 and earlier did) made the
+  // dollars-first status bar and the +X¢ flash feel sluggish: the user would
+  // see a request finish in chat ~2s before the bar's number ticked up.
+  // `buildData()` is cache-keyed on `otelStats.requests`, so the two calls
+  // below (one inside `updateStatusBar` → `pushSidebarSnapshot`, one for the
+  // dashboard panel) return the same snapshot — no drift risk.
+  //
+  // DEBOUNCED PATH (expensive): coalesce bursts of OTel events into a single
+  // `runScan()` so the debug-log `copilotUsageNanoAiu` overlay (exact API-
+  // billed AIC) catches up without thrashing disk I/O. After the scan, we
+  // refresh the UI one more time so the overlay-adjusted numbers land.
   receiver.onStats(() => {
+    updateStatusBar();
+    DashboardPanel.updateIfVisible(buildData());
+
     if (otelDebounceTimer) {
       return;
-    } // Already scheduled
+    }
     otelDebounceTimer = setTimeout(() => {
       otelDebounceTimer = undefined;
       void runScan().then(() => {
@@ -613,30 +626,34 @@ function updateStatusBar(): void {
   const scan = lastScan?.stats ?? null;
   const otel = receiver?.getStats() ?? null;
 
-  let currentSession: CurrentSessionInfo | null = null;
-  let currentSessionAIC = 0;
-
   const aicConfig = getAICConfig();
   const calculator = createCalculatorFromConfig(aicConfig);
   const AIC_START = AIC_EFFECTIVE_DATE;
 
-  // When live OTel is active it is already scoped to this VS Code instance (in-memory).
-  // Compute AIC from OTel directly — no scanner needed for "current".
+  // SOURCE OF TRUTH for AIC: `dashData.liveOtel` — the same numbers the
+  // dashboard widgets and the sidebar render. Until v1.10.5 the status bar
+  // had its own independent reimplementation of session/last-request AIC
+  // computation, which had drifted from `dashboardData.liveOtel` repeatedly
+  // (v1.9.17: bar 8025.8 vs dashboard 111.2; v1.10.2 sidebar 214.1 vs
+  // dashboard 129.3; v1.10.4 bar $1.53 / 153.3 vs dashboard 90.3). Reading
+  // straight from `dashData.liveOtel` makes drift impossible by construction
+  // — there is now exactly one producer of the per-model exact-AIU overlay.
+  // See .agents/agents.md "Status bar consumption" — this is the prescribed
+  // shape (status bar and dashboard MUST stay in lock-step).
+  const dashData = buildData();
+  const currentSessionAIC = dashData.liveOtel.sessionAIC;
+  const lastRequestAIC = dashData.liveOtel.lastRequestAIC;
+
+  // Build currentSession METADATA only (model / turns / prompt / output /
+  // duration). The `aicCredits` field is filled from `currentSessionAIC`
+  // above — no credit math happens in this block.
+  let currentSession: CurrentSessionInfo | null = null;
   if (otel && otel.requests > 0) {
-    let otelAIC = 0;
     let otelPrompt = 0;
     let otelOutput = 0;
     let otelModel = "unknown";
     let maxTokens = 0;
     for (const m of otel.byModel.values()) {
-      const usage = calculator.calculateCredits(
-        m.model,
-        m.prompt,
-        m.completion,
-        m.cached,
-        m.cacheWrite
-      );
-      otelAIC += usage.totalCredits;
       otelPrompt += m.prompt;
       otelOutput += m.completion;
       if (m.prompt + m.completion > maxTokens) {
@@ -644,37 +661,6 @@ function updateStatusBar(): void {
         otelModel = m.model;
       }
     }
-
-    // Overlay debug-log AIC (exact API-billed copilotUsageNanoAiu). OTel cache
-    // attributes are missing for some Anthropic Opus traces, which makes the
-    // calculator under- or over-report. Debug logs always carry the exact
-    // billed value, so prefer it when it is at least as large.
-    //
-    // SCOPE: filter to turns that arrived AFTER this extension activated. The
-    // calendar-day filter alone matched every prior VS Code window's debug-log
-    // turns from today (debug-logs live in shared workspaceStorage), so the
-    // status bar's `AIC(sess)` would inherit thousands of credits from an
-    // earlier window while the dashboard's `AIC (sess)` — which already had
-    // the activationTime filter (v1.9.16) — correctly showed only this
-    // window's spend. Same root cause, same fix.
-    if (lastScan && lastScan.turns.length > 0) {
-      const debugAicSession = lastScan.turns.reduce((sum, t) => {
-        if (
-          t.timestamp &&
-          t.timestamp >= activationTime &&
-          t.timestamp.slice(0, 10) >= AIC_START &&
-          t.debugAicCredits > 0
-        ) {
-          return sum + t.debugAicCredits;
-        }
-        return sum;
-      }, 0);
-      if (debugAicSession > otelAIC) {
-        otelAIC = debugAicSession;
-      }
-    }
-
-    currentSessionAIC = Math.round(otelAIC * 100) / 100;
     currentSession = {
       sessionId: "otel",
       sessionShort: "otel",
@@ -694,23 +680,11 @@ function updateStatusBar(): void {
     );
 
     if (instanceTurns.length > 0) {
-      let instanceAIC = 0;
       let instancePrompt = 0;
       let instanceOutput = 0;
       const modelTokens = new Map<string, number>();
 
       for (const t of instanceTurns) {
-        if (t.debugAicCredits > 0) {
-          instanceAIC += t.debugAicCredits;
-        } else {
-          const usage = calculator.calculateCredits(
-            t.modelFamily || "unknown",
-            t.debugPromptTokens || t.promptTokens,
-            t.debugOutputTokens || t.outputTokens,
-            0
-          );
-          instanceAIC += usage.totalCredits;
-        }
         instancePrompt += t.debugPromptTokens || t.promptTokens;
         instanceOutput += t.debugOutputTokens || t.outputTokens;
         const m = t.modelFamily || "unknown";
@@ -723,7 +697,6 @@ function updateStatusBar(): void {
       }
 
       const topModel = [...modelTokens.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "unknown";
-      currentSessionAIC = Math.round(instanceAIC * 100) / 100;
       currentSession = {
         sessionId: "instance",
         sessionShort: "instance",
@@ -738,56 +711,6 @@ function updateStatusBar(): void {
     }
   }
 
-  // Compute per-request AIC from last OTel request, then overlay the most
-  // recent debug-log turn's exact AIC if it is at least as new. Debug-log
-  // values come from `copilotUsageNanoAiu` (the API-billed credit count) and
-  // are authoritative — OTel cache attributes are unreliable for some models.
-  //
-  // SCOPE: same activationTime filter as `currentSessionAIC` above. Without
-  // it, a prior VS Code window's turn whose `timestamp` happens to be newer
-  // than this window's last OTel request could leak its AIC into `Req:`.
-  // Also prefer the per-event `debugLastRequestTs` / `debugLastRequestAic`
-  // over the turn-start time / turn total — matches dashboard logic so a
-  // turn containing many tool-call llm_requests reports only the value of
-  // the truly latest single request, not the sum.
-  let lastRequestAIC = 0;
-  let lastRequestSourceTs = "";
-  if (otel && otel.lastRequest) {
-    const lr = otel.lastRequest;
-    const reqCredits = calculator.calculateCredits(
-      lr.modelName,
-      lr.promptTokens,
-      lr.completionTokens,
-      lr.cachedTokens,
-      lr.cacheWriteTokens
-    );
-    lastRequestAIC = reqCredits.totalCredits;
-    lastRequestSourceTs = lr.timestamp || "";
-  }
-  if (lastScan && lastScan.turns.length > 0) {
-    let mostRecentDebug: { ts: string; aic: number } | undefined;
-    for (const t of lastScan.turns) {
-      if (!t.timestamp || t.timestamp < activationTime) {
-        continue;
-      }
-      if (t.timestamp.slice(0, 10) < AIC_START) {
-        continue;
-      }
-      const ts = t.debugLastRequestTs || t.timestamp;
-      const aic = t.debugLastRequestAic > 0 ? t.debugLastRequestAic : t.debugAicCredits;
-      if (aic <= 0) {
-        continue;
-      }
-      if (!mostRecentDebug || ts > mostRecentDebug.ts) {
-        mostRecentDebug = { ts, aic };
-      }
-    }
-    if (mostRecentDebug && (mostRecentDebug.ts >= lastRequestSourceTs || lastRequestAIC === 0)) {
-      lastRequestAIC = mostRecentDebug.aic;
-    }
-  }
-  lastRequestAIC = Math.round(lastRequestAIC * 100) / 100;
-
   statusBar.updateStatus({
     otel,
     scan,
@@ -796,22 +719,29 @@ function updateStatusBar(): void {
     currentSessionAIC,
     lastRequestAIC,
     dailyLimit: computeAndPushDailyLimit(calculator),
+    dollarPerCredit: aicConfig.overageCostPerCredit ?? 0.01,
   });
 
   // Stash current-session metadata for the sidebar (model / turns / duration).
   // The sidebar's AIC numbers themselves are read from dashData.liveOtel in
   // pushSidebarSnapshot() so they always match the dashboard widgets.
   lastCurrentSession = currentSession;
-  pushSidebarSnapshot();
+  // Reuse the dashData we already computed — avoids a second buildData() call
+  // per status update tick.
+  pushSidebarSnapshot(dashData);
 }
 
 /** Build + post the latest SidebarSnapshot using whatever data we already have. */
-function pushSidebarSnapshot(): void {
+function pushSidebarSnapshot(precomputed?: DashboardData): void {
   if (!sidebarProvider) {
     return;
   }
   try {
-    const dashData = buildData();
+    // Reuse the caller's dashData when available (the common updateStatusBar
+    // path already built it) — otherwise build our own. Both branches feed
+    // the same `dashData.liveOtel` values into the sidebar so the AIC
+    // numbers are guaranteed identical to the dashboard widgets.
+    const dashData = precomputed ?? buildData();
     // SESSION-AIC SOURCE OF TRUTH: read from `dashData.liveOtel.sessionAIC`
     // and `dashData.liveOtel.lastRequestAIC` — NOT from the status-bar's
     // independent reimplementation cached in `lastCurrentSessionAIC` /
