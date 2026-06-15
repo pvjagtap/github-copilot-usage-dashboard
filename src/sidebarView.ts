@@ -580,7 +580,7 @@ const SIDEBAR_JS = `
     const overageBadge = pace.overBudget
       ? '<span class="chip" style="background:#f8514933;color:#f85149">' + pace.overagePct.toFixed(0) + '% ⚠</span>'
       : '<span class="chip base">' + pace.overagePct.toFixed(0) + '%</span>';
-    const promoAnnot = pace.promoEndDate && new Date(pace.promoEndDate) > new Date()
+    const promoAnnot = pace.promoActive && pace.promoEndDate && new Date(pace.promoEndDate) > new Date()
       ? ' · promo until ' + esc(pace.promoEndDate.slice(0, 10))
       : '';
     const paceCard =
@@ -639,10 +639,15 @@ const SIDEBAR_JS = `
       tokBar('Output', b.tokens.output, maxTok) +
       tokBar('Cache',  b.tokens.cached, maxTok);
 
+    const budgetLabel = b.budget > 0
+      ? '<div class="muted tiny">' + (b.promoActive ? 'promo budget ' : 'budget ') + fmtAic(b.budget) + ' AIC</div>'
+      : '';
+
     body.innerHTML =
       '<div class="card">' +
-        '<div class="card-title"><span>Total Spent (cycle)</span></div>' +
-        '<div class="big">' + fmtAic(b.totalAic) + '<span class="unit">AIC · ' + fmtUsd(b.totalUsd) + '</span></div>' +
+        '<div class="card-title"><span>Total Credits (cycle)</span></div>' +
+        '<div class="big">' + fmtAic(b.totalAic) + '<span class="unit">AIC · overage ' + fmtUsd(b.totalUsd) + '</span></div>' +
+        budgetLabel +
       '</div>' +
       '<div class="card">' + sparkBlock + '</div>' +
       '<div class="card"><div class="card-title"><span>By Model</span></div>' + modelBars + '</div>' +

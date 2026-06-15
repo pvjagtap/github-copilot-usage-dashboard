@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.10] - 2026-06-15
+
+### Fixed
+
+- **Sidebar AIC dollars now match the dashboard under active PROMO budgets.** The sidebar breakdown now displays cycle overage dollars from the shared dashboard AIC summary instead of converting all consumed credits at face value.
+- **Sidebar pace now uses projected cycle credits.** The pace badge, over-budget state, and projected overage amount now follow the same projected-budget logic as the full dashboard.
+
 ## [1.10.9] - 2026-06-15
 
 ### Fixed

@@ -59,6 +59,7 @@ export interface SidebarPace {
   projectedCredits: number;
   overagePct: number;
   cycleEnd: string;
+  promoActive: boolean;
   promoEndDate: string;
   overBudget: boolean;
   budget: number;
@@ -67,6 +68,9 @@ export interface SidebarPace {
 export interface SidebarBreakdown {
   totalAic: number;
   totalUsd: number;
+  creditValueUsd: number;
+  budget: number;
+  promoActive: boolean;
   /** Up to 14 most-recent days' credit totals, oldest → newest. */
   dailySparkline: number[];
   peakDay: string;
@@ -239,19 +243,23 @@ export function buildSidebarSnapshot(input: SidebarBuildInput): SidebarSnapshot 
         }
       : null;
 
+  const promoActive = aic.promo.isPromoActive && aic.promo.promoBudget > 0;
+  const effectiveOverageUsd = typeof aic.estimatedOverageCost === "number"
+    ? aic.estimatedOverageCost
+    : Math.max(0, aic.totalCredits - aic.monthlyBudget) * dollarsPerCredit;
+
   // ── Pace (projected cycle spend) ──
   const projectedCredits = aic.projectedTotal;
-  const projectedUsd =
-    projectedCredits > aic.monthlyBudget
-      ? (projectedCredits - aic.monthlyBudget) * dollarsPerCredit
-      : 0;
+  const projectedUsd = Math.max(0, projectedCredits - aic.monthlyBudget) * dollarsPerCredit;
+  const projectedPct = safePct(projectedCredits, aic.monthlyBudget);
   const pace: SidebarPace = {
     projectedUsd,
     projectedCredits,
-    overagePct: safePct(aic.totalCredits, aic.monthlyBudget),
+    overagePct: projectedPct,
     cycleEnd: aic.billingCycleEnd,
+    promoActive,
     promoEndDate: aic.promo.promoEndDate,
-    overBudget: aic.totalCredits > aic.monthlyBudget,
+    overBudget: projectedCredits > aic.monthlyBudget,
     budget: aic.monthlyBudget,
   };
 
@@ -320,7 +328,10 @@ export function buildSidebarSnapshot(input: SidebarBuildInput): SidebarSnapshot 
 
   const breakdown: SidebarBreakdown = {
     totalAic: aic.totalCredits,
-    totalUsd: aic.totalCredits * dollarsPerCredit,
+    totalUsd: effectiveOverageUsd,
+    creditValueUsd: aic.totalCredits * dollarsPerCredit,
+    budget: aic.monthlyBudget,
+    promoActive,
     dailySparkline: days14,
     peakDay,
     peakValue,
@@ -351,7 +362,7 @@ export function buildSidebarSnapshot(input: SidebarBuildInput): SidebarSnapshot 
     status: {
       liveState,
       planName: aic.planName,
-      promoActive: aic.promo.isPromoActive,
+      promoActive,
       promoEndDate: aic.promo.promoEndDate,
       generatedAt: dashData.generatedAt,
     },
