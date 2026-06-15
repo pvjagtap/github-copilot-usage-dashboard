@@ -183,6 +183,7 @@ function parseSessionDir(sessDir) {
   const agentT0 = Date.now();
   const agentScan = await scanAgentSessions();
   const calculator = createCalculatorFromConfig(DEFAULT_AIC_CONFIG);
+  const agentByModel = new Map();
   let truthOmpCredits = 0;
   let truthPiCredits = 0;
   for (const session of agentScan.sessions) {
@@ -193,6 +194,8 @@ function parseSessionDir(sessDir) {
       const usage = calculator.calculateCredits(model, grossInput, stats.output, stats.cacheRead, stats.cacheWrite);
       if (session.source === "omp") truthOmpCredits += usage.totalCredits;
       else truthPiCredits += usage.totalCredits;
+      const modelKey = usage.model.toLowerCase();
+      agentByModel.set(modelKey, (agentByModel.get(modelKey) ?? 0) + usage.totalCredits);
     }
   }
   const agentMs = Date.now() - agentT0;
@@ -217,6 +220,31 @@ function parseSessionDir(sessDir) {
   const activationHistorical = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
   const dash = buildDashboardData(scan, null, DEFAULT_AIC_CONFIG, agentScan, activationHistorical);
 
+  // Dashboard intentionally includes rate-table fallback credits for VS Code
+  // turns that have chatSession token counts but no debug-log nanoAIU. Those
+  // are not API-truth rows, so track them separately instead of reporting them
+  // as raw-debug-log drift.
+  const fallbackByDay = new Map();
+  const fallbackByModel = new Map();
+  let fallbackCredits = 0;
+  let fallbackTurns = 0;
+  for (const t of scan.turns) {
+    if (!t.timestamp || t.timestamp.slice(0, 10) < AIC_EFFECTIVE_DATE) continue;
+    if ((t.debugAicCredits || 0) > 0 || (t.debugRequests && t.debugRequests.length > 0)) continue;
+    const inputTokens = t.debugPromptTokens || t.promptTokens || 0;
+    const outputTokens = t.debugOutputTokens || t.outputTokens || 0;
+    if (inputTokens <= 0 && outputTokens <= 0) continue;
+    const model = t.modelFamily || "unknown";
+    const usage = calculator.calculateCredits(model, inputTokens, outputTokens, 0);
+    if (usage.totalCredits <= 0) continue;
+    const day = t.timestamp.slice(0, 10);
+    fallbackTurns++;
+    fallbackCredits += usage.totalCredits;
+    fallbackByDay.set(day, (fallbackByDay.get(day) ?? 0) + usage.totalCredits);
+    const modelKey = usage.model.toLowerCase();
+    fallbackByModel.set(modelKey, (fallbackByModel.get(modelKey) ?? 0) + usage.totalCredits);
+  }
+
   console.log("\nDashboard (per-source — what the USAGE BY SOURCE card shows):");
   console.log("  agentSummary.vscodeAicCredits   =", dash.agentSummary.vscodeAicCredits.toFixed(2));
   console.log("  agentSummary.ompTotalCredits    =", dash.agentSummary.ompTotalCredits.toFixed(2));
@@ -225,6 +253,9 @@ function parseSessionDir(sessDir) {
   console.log("  aicSummary.totalCredits         =", dash.aicSummary.totalCredits.toFixed(2));
   console.log("  liveOtel.sessionAIC             =", dash.liveOtel.sessionAIC.toFixed(2));
   console.log("  liveOtel.lastRequestAIC         =", dash.liveOtel.lastRequestAIC.toFixed(2));
+  if (fallbackTurns > 0) {
+    console.log("  estimated fallback turns        =", `${fallbackTurns} turns, ${fallbackCredits.toFixed(2)} credits`);
+  }
 
   // ─── Assertions ─────────────────────────────────────────────
   const checks = [];
@@ -235,14 +266,14 @@ function parseSessionDir(sessDir) {
     checks.push({ label, ok, dashV, truthV, diff, pct });
   }
 
-  within("VS Code: agentSummary.vscodeAicCredits ↔ Σ nanoAiu/1e9",
-    dash.agentSummary.vscodeAicCredits, truthVSCodeCredits, 0.5, 0.01);
+  within("VS Code: agentSummary.vscodeAicCredits ↔ API nanoAIU + estimated fallback",
+    dash.agentSummary.vscodeAicCredits, truthVSCodeCredits + fallbackCredits, 0.5, 0.01);
   within("OMP: agentSummary.ompTotalCredits ↔ recomputed",
     dash.agentSummary.ompTotalCredits, truthOmpCredits, 0.5, 0.01);
   within("Pi: agentSummary.piTotalCredits ↔ recomputed",
     dash.agentSummary.piTotalCredits, truthPiCredits, 0.5, 0.01);
-  within("TOTAL: aicSummary.totalCredits ↔ vscode+omp+pi truth",
-    dash.aicSummary.totalCredits, truthTotalCredits, 0.5, 0.01);
+  within("TOTAL: aicSummary.totalCredits ↔ API/agent truth + estimated fallback",
+    dash.aicSummary.totalCredits, truthTotalCredits + fallbackCredits, 0.5, 0.01);
   within("agentSummary.totalCredits ↔ aicSummary.totalCredits (internal consistency)",
     dash.agentSummary.totalCredits, dash.aicSummary.totalCredits, 0.01, 0.01);
 
@@ -266,7 +297,7 @@ function parseSessionDir(sessDir) {
   let perDayMaxDriftAbs = 0;
   const allDays = new Set([...truthByDay.keys(), ...dashDayMap.keys()]);
   for (const day of allDays) {
-    const truth = (truthByDay.get(day) ?? 0) / 1e9 + (agentByDay.get(day) ?? 0);
+    const truth = (truthByDay.get(day) ?? 0) / 1e9 + (agentByDay.get(day) ?? 0) + (fallbackByDay.get(day) ?? 0);
     const dash = dashDayMap.get(day) ?? 0;
     const diff = dash - truth;
     const pct = truth !== 0 ? Math.abs(diff / truth) * 100 : (Math.abs(diff) > 0.01 ? Infinity : 0);
@@ -289,25 +320,27 @@ function parseSessionDir(sessDir) {
   // ─── Per-day table (VS Code + OMP/Pi combined truth) ──────
   console.log("\nPer-day comparison (last 12 days):");
   const sortedDays = [...allDays].sort().reverse().slice(0, 12);
-  console.log("  Day         |  VS truth | OMP+Pi   |  Total truth |  Dash byDay |   Diff    |    %");
+  console.log("  Day         |  VS truth | OMP+Pi   | Fallback |  Total truth |  Dash byDay |   Diff    |    %");
   console.log("  " + "─".repeat(86));
   for (const day of sortedDays) {
     const vsTruth = (truthByDay.get(day) ?? 0) / 1e9;
     const agentTruth = agentByDay.get(day) ?? 0;
-    const totalTruth = vsTruth + agentTruth;
+    const fallback = fallbackByDay.get(day) ?? 0;
+    const totalTruth = vsTruth + agentTruth + fallback;
     const dashV = dashDayMap.get(day) ?? 0;
     const diff = dashV - totalTruth;
     const pct = totalTruth !== 0 ? (diff / totalTruth) * 100 : 0;
-    console.log(`  ${day}  | ${vsTruth.toFixed(2).padStart(9)} | ${agentTruth.toFixed(2).padStart(8)} | ${totalTruth.toFixed(2).padStart(12)} | ${dashV.toFixed(2).padStart(11)} | ${diff.toFixed(2).padStart(9)} | ${pct.toFixed(2).padStart(7)}%`);
+    console.log(`  ${day}  | ${vsTruth.toFixed(2).padStart(9)} | ${agentTruth.toFixed(2).padStart(8)} | ${fallback.toFixed(2).padStart(8)} | ${totalTruth.toFixed(2).padStart(12)} | ${dashV.toFixed(2).padStart(11)} | ${diff.toFixed(2).padStart(9)} | ${pct.toFixed(2).padStart(7)}%`);
   }
 
-  // ─── Per-model table (VS Code only, since byModel in dashboard mixes all) ──
-  console.log("\nPer-model comparison (VS Code nanoAiu vs dashboard byModel):");
+  // ─── Per-model table (VS Code + OMP/Pi + fallback, matching dashboard byModel) ──
+  console.log("\nPer-model comparison (combined truth vs dashboard byModel):");
   const dashModelMap = new Map(dash.aicSummary.byModel.map(m => [m.model.toLowerCase(), m.totalCredits]));
-  console.log("  Model                              | VS truth  |  Dash     | Diff   | %");
+  console.log("  Model                              | Truth     |  Dash     | Diff   | %");
   console.log("  " + "─".repeat(78));
-  const truthModels = [...truthByModel.entries()]
-    .map(([m, n]) => ({ model: m, truth: n / 1e9, dash: dashModelMap.get(m) ?? 0 }))
+  const allModels = new Set([...truthByModel.keys(), ...agentByModel.keys(), ...fallbackByModel.keys(), ...dashModelMap.keys()]);
+  const truthModels = [...allModels]
+    .map(m => ({ model: m, truth: (truthByModel.get(m) ?? 0) / 1e9 + (agentByModel.get(m) ?? 0) + (fallbackByModel.get(m) ?? 0), dash: dashModelMap.get(m) ?? 0 }))
     .sort((a, b) => b.truth - a.truth);
   for (const m of truthModels) {
     const diff = m.dash - m.truth;

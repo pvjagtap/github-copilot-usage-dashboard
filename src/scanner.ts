@@ -81,6 +81,8 @@ export interface Turn {
    * single `modelFamily`. Undefined when no llm_requests carried a model attr.
    */
   debugByModel?: Record<string, DebugModelTotals>;
+  /** Individual debug-log llm_request records used to dedupe live OTel requests. */
+  debugRequests?: DebugRequest[];
   toolCallRounds: number;
   toolCallResults: number;
   workspaceName: string;
@@ -93,6 +95,16 @@ export interface DebugModelTotals {
   cached: number;
   calls: number;
   /** Sum of copilotUsageNanoAiu for this model (divide by 1e9 for credits). */
+  nanoAiu: number;
+}
+
+/** Single API-billed llm_request captured from debug logs. */
+export interface DebugRequest {
+  timestamp: string;
+  model: string;
+  prompt: number;
+  output: number;
+  cached: number;
   nanoAiu: number;
 }
 
@@ -912,6 +924,8 @@ interface DebugLogTurnTokens {
    * turn's single `modelFamily` would otherwise hide.
    */
   byModel: Map<string, DebugModelTotals>;
+  /** Individual llm_request records for request-level live OTel reconciliation. */
+  requests: DebugRequest[];
 }
 
 /** Initialise an empty DebugModelTotals row. */
@@ -932,6 +946,7 @@ function emptyDebugTurn(turnIndex: number, timestamp = 0): DebugLogTurnTokens {
     lastRequestNanoAiu: 0,
     lastRequestTs: 0,
     byModel: new Map<string, DebugModelTotals>(),
+    requests: [],
   };
 }
 
@@ -957,6 +972,8 @@ interface DebugLogData {
   totalLlmCalls: number;
   /** Total nano-AIU from all LLM calls (sum of copilotUsageNanoAiu) */
   totalNanoAiu: number;
+  /** Individual llm_request records across this debug-log directory. */
+  requests: DebugRequest[];
 }
 
 /**
@@ -979,6 +996,8 @@ interface ParsedDebugLog {
    * `turn_start` fires — those would otherwise be invisible in `turnMap`.
    */
   byModel: Map<string, DebugModelTotals>;
+  /** Individual llm_request records across this file. */
+  requests: DebugRequest[];
 }
 
 function parseDebugLogLines(content: string): ParsedDebugLog | null {
@@ -999,6 +1018,7 @@ function parseDebugLogLines(content: string): ParsedDebugLog | null {
   // generation, which fires before any turn_start) still contribute to
   // per-model attribution.
   const sessionByModel = new Map<string, DebugModelTotals>();
+  const sessionRequests: DebugRequest[] = [];
 
   for (const line of lines) {
     let entry: unknown;
@@ -1050,10 +1070,19 @@ function parseDebugLogLines(content: string): ParsedDebugLog | null {
       // call returned), fall back to 0 so we don't regress the turn's existing
       // turn_start timestamp.
       const eventTs = typeof entry.ts === "number" ? entry.ts : 0;
+      const debugRequest: DebugRequest = {
+        timestamp: eventTs ? new Date(eventTs).toISOString() : "",
+        model: reqModel,
+        prompt: inp,
+        output: out,
+        cached,
+        nanoAiu,
+      };
       totalPrompt += inp;
       totalOutput += out;
       totalNanoAiu += nanoAiu;
       totalLlmCalls++;
+      sessionRequests.push(debugRequest);
       // Session-level per-model accumulation (covers pre-turn requests too).
       const sm = sessionByModel.get(reqModel) ?? emptyModelTotals();
       sm.prompt += inp;
@@ -1073,6 +1102,7 @@ function parseDebugLogLines(content: string): ParsedDebugLog | null {
         t.cachedTotal += cached;
         t.nanoAiu += nanoAiu;
         t.llmCalls++;
+        t.requests.push(debugRequest);
         // Accumulate per-model totals for this turn so the dashboard's
         // per-model breakdown can show auxiliary models separately.
         const m = t.byModel.get(reqModel) ?? emptyModelTotals();
@@ -1110,6 +1140,7 @@ function parseDebugLogLines(content: string): ParsedDebugLog | null {
     turnMap,
     childLogFiles,
     byModel: sessionByModel,
+    requests: sessionRequests,
   };
 }
 
@@ -1136,6 +1167,7 @@ async function parseDebugLogDir(sessionDir: string): Promise<DebugLogData | null
   let totalOutput = main.totalOutput;
   let totalLlmCalls = main.totalLlmCalls;
   let totalNanoAiu = main.totalNanoAiu;
+  const requests = main.requests.slice();
 
   // Older Copilot versions (and some session boundary conditions) leave
   // `title-*.jsonl` and `runSubagent-*.jsonl` on disk WITHOUT a matching
@@ -1183,6 +1215,7 @@ async function parseDebugLogDir(sessionDir: string): Promise<DebugLogData | null
       totalOutput += child.totalOutput;
       totalLlmCalls += child.totalLlmCalls;
       totalNanoAiu += child.totalNanoAiu;
+      requests.push(...child.requests);
 
       // Merge child credits into the parent turn that spawned it. The
       // `title-*.jsonl` child fires BEFORE any `turn_start` (parentTurn === -1)
@@ -1200,8 +1233,20 @@ async function parseDebugLogDir(sessionDir: string): Promise<DebugLogData | null
       }
       pt.promptTotal += child.totalPrompt;
       pt.outputTotal += child.totalOutput;
+      pt.cachedTotal += Array.from(child.turnMap.values()).reduce((sum, turn) => sum + turn.cachedTotal, 0);
       pt.llmCalls += child.totalLlmCalls;
       pt.nanoAiu += child.totalNanoAiu;
+      pt.requests.push(...child.requests);
+      for (const req of child.requests) {
+        const reqTs = req.timestamp ? Date.parse(req.timestamp) : 0;
+        if (reqTs >= pt.lastRequestTs) {
+          pt.lastRequestTs = reqTs;
+          pt.lastRequestNanoAiu = req.nanoAiu;
+        }
+        if (reqTs > pt.timestamp) {
+          pt.timestamp = reqTs;
+        }
+      }
       // Merge child's per-model breakdown so the parent turn surfaces
       // auxiliary models (title gpt-4o-mini, subagent haiku) in the
       // dashboard's per-model rows instead of hiding them under the
@@ -1220,6 +1265,7 @@ async function parseDebugLogDir(sessionDir: string): Promise<DebugLogData | null
     totalOutput,
     totalLlmCalls,
     totalNanoAiu,
+    requests,
   };
 }
 
@@ -1453,6 +1499,9 @@ export async function scanWorkspaceStorage(workspaceStorageOverride?: string): P
           if (dt.byModel.size > 0) {
             t.debugByModel = Object.fromEntries(dt.byModel);
           }
+          if (dt.requests.length > 0) {
+            t.debugRequests = dt.requests.slice();
+          }
         }
       } else if (dt.promptTotal > 0 || dt.outputTotal > 0 || dt.llmCalls > 0) {
         // chatSession hasn't flushed this turn yet — create synthetic turn from debug-log.
@@ -1485,6 +1534,7 @@ export async function scanWorkspaceStorage(workspaceStorageOverride?: string): P
             ? new Date(dt.lastRequestTs).toISOString()
             : "",
           debugByModel: dt.byModel.size > 0 ? Object.fromEntries(dt.byModel) : undefined,
+          debugRequests: dt.requests.length > 0 ? dt.requests.slice() : undefined,
           toolCallRounds: dt.llmCalls > 1 ? dt.llmCalls - 1 : 0,
           toolCallResults: 0,
           workspaceName: "",

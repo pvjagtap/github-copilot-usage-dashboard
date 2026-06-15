@@ -3,9 +3,9 @@
  * Ports get_dashboard_data() from dashboard.py to TypeScript.
  */
 
-import { ScanResult, Session, Turn, ToolCall, Subagent, ScanStats } from "./scanner";
+import { ScanResult, Session, Turn, ToolCall, Subagent, ScanStats, DebugRequest } from "./scanner";
 import { AgentScanResult } from "./agentScanner";
-import { LiveStats } from "./otelReceiver";
+import { LiveStats, OTelRequest } from "./otelReceiver";
 import { AICCalculator, AICConfig, DEFAULT_AIC_CONFIG, createCalculatorFromConfig, getPromoInfo } from "./aicCredits";
 
 /**
@@ -14,6 +14,129 @@ import { AICCalculator, AICConfig, DEFAULT_AIC_CONFIG, createCalculatorFromConfi
  * GitHub Copilot usage-based billing started June 1, 2026.
  */
 export const AIC_EFFECTIVE_DATE = "2026-06-01";
+
+function roundCredits(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function otelRequestCredits(calculator: AICCalculator, req: OTelRequest): number {
+  return calculator.calculateCredits(
+    req.modelName,
+    req.promptTokens,
+    req.completionTokens,
+    req.cachedTokens,
+    req.cacheWriteTokens,
+  ).totalCredits;
+}
+
+function normalizeRequestModel(model: string): string {
+  return model.toLowerCase().trim().replace(/[\s_]+/g, "-").replace(/(\d)-(\d)/g, "$1.$2");
+}
+
+/**
+ * Extract a "model family" for fuzzy matching.  Strips trailing minor
+ * version (`.7`, `.6`) and date suffixes (`-2024.07.18`) so that request
+ * vs response model aliases (e.g. OTel reports `claude-opus-4.6` while
+ * the debug-log records the API response model `claude-opus-4.7`) still
+ * match during reconciliation.
+ */
+function modelFamily(model: string): string {
+  return normalizeRequestModel(model)
+    .replace(/-\d{4}[-.]?\d{2}[-.]?\d{2}$/, "")   // strip date suffix
+    .replace(/\.\d+$/, "");                         // strip trailing .X
+}
+
+function debugRequestsFromTurns(turns: Turn[]): DebugRequest[] {
+  const requests: DebugRequest[] = [];
+  for (const turn of turns) {
+    if (turn.debugRequests && turn.debugRequests.length > 0) {
+      requests.push(...turn.debugRequests);
+      continue;
+    }
+    if (turn.debugAicCredits <= 0 || turn.debugLlmCalls > 1) {
+      continue;
+    }
+    const debugModels = turn.debugByModel ? Object.entries(turn.debugByModel) : [];
+    const [model, totals] = debugModels.length === 1 ? debugModels[0] : [turn.modelFamily || "unknown", undefined];
+    requests.push({
+      timestamp: turn.debugLastRequestTs || turn.timestamp,
+      model,
+      prompt: totals?.prompt ?? (turn.debugPromptTokens || turn.promptTokens),
+      output: totals?.output ?? (turn.debugOutputTokens || turn.outputTokens),
+      cached: totals?.cached ?? (turn.debugCachedTokens || 0),
+      nanoAiu: totals?.nanoAiu ?? turn.debugAicCredits * 1e9,
+    });
+  }
+  return requests;
+}
+
+function debugRequestsInWindow(turns: Turn[], todayDate: string, activationTime?: string): DebugRequest[] {
+  return debugRequestsFromTurns(turns).filter(req => {
+    if (!req.timestamp || req.timestamp.slice(0, 10) !== todayDate) {
+      return false;
+    }
+    return !activationTime || req.timestamp >= activationTime;
+  });
+}
+
+function latestDebugRequest(requests: readonly DebugRequest[]): DebugRequest | undefined {
+  return requests.reduce((best, req) => {
+    if (!best) {
+      return req;
+    }
+    return (req.timestamp || "") > (best.timestamp || "") ? req : best;
+  }, undefined as DebugRequest | undefined);
+}
+
+/**
+ * Determine which OTel requests have NOT yet been flushed to the debug log.
+ *
+ * Uses **count-based per-model matching**: for each model family, if the debug
+ * log has N requests and OTel has M requests, the (M - N) newest OTel requests
+ * are treated as "pending" (not yet flushed). This avoids the fragile exact
+ * token-count comparison that fails when the debug log and OTel record slightly
+ * different values for the same API call (common with Anthropic Opus where OTel
+ * traces omit cache attributes, causing normalization differences).
+ */
+function unflushedOtelRequests(liveRequestLog: readonly OTelRequest[], debugRequests: readonly DebugRequest[], todayDate: string, activationTime?: string): OTelRequest[] {
+  // Count debug requests per model family (only those with meaningful data).
+  const debugCountByFamily = new Map<string, number>();
+  for (const d of debugRequests) {
+    if (d.prompt <= 0 && d.output <= 0) { continue; }
+    const family = modelFamily(d.model);
+    debugCountByFamily.set(family, (debugCountByFamily.get(family) ?? 0) + 1);
+  }
+
+  // Filter OTel requests to today + activation window, grouped by model family.
+  const otelByFamily = new Map<string, OTelRequest[]>();
+  for (const req of liveRequestLog) {
+    if (!req.timestamp || req.timestamp.slice(0, 10) !== todayDate) {
+      continue;
+    }
+    if (activationTime && req.timestamp < activationTime) {
+      continue;
+    }
+    const family = modelFamily(req.modelName);
+    const list = otelByFamily.get(family) ?? [];
+    list.push(req);
+    otelByFamily.set(family, list);
+  }
+
+  // For each model family, the newest (M - N) OTel requests are pending.
+  const pending: OTelRequest[] = [];
+  for (const [family, otelReqs] of otelByFamily) {
+    const debugCount = debugCountByFamily.get(family) ?? 0;
+    if (otelReqs.length <= debugCount) {
+      // All OTel requests for this model have been flushed — none pending.
+      continue;
+    }
+    // Sort ascending by timestamp so we can skip the oldest N (matched) and
+    // keep the newest (M - N) as pending.
+    otelReqs.sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
+    pending.push(...otelReqs.slice(debugCount));
+  }
+  return pending;
+}
 
 // ─── Dashboard Data Types ─────────────────────────────────────
 
@@ -360,58 +483,21 @@ function computeAllModels(turns: Turn[]): string[] {
 
 // ─── Build Dashboard Data ─────────────────────────────────────
 
-/**
- * Per-activation high-water mark for `liveOtel.sessionAIC`.
- *
- * Why this exists: the per-model overlay in the OTel branch below replaces
- * the rate-table estimate with the exact `copilotUsageNanoAiu` value when
- * the debug log catches up. For models whose OTel traces are missing cache
- * attributes (notably Anthropic Opus), the rate estimate over-counts, so
- * when the exact value lands the per-model credits — and therefore
- * sessionAIC — DROP. v1.10.6 made the dashboard tick on every OTel batch
- * (not just the debounced 2s scan), so users now see the corrected value
- * land ~2s after the over-estimate flashes, producing a visible decrease
- * like 147 → 138 between consecutive requests.
- *
- * Session cumulative AIC must be monotonically non-decreasing. We ratchet
- * to the high-water mark per activation; the per-model breakdown table
- * still shows the corrected exact values, only the rolled-up
- * `sessionAIC` number is locked from going backward.
- *
- * Keyed by `activationTime` so a window reload resets to zero — a fresh
- * activation correctly starts a new "session" for this purpose.
- *
- * NOTE: this is a per-process cache (lives in the extension host). It is
- * cleared automatically by the activation-time key change; no explicit
- * reset call is needed.
- */
-const _sessionAICRatchet = new Map<string, number>();
-
-/**
- * Apply the per-activation monotonic ratchet to a candidate sessionAIC value.
- * Returns max(candidate, previously-seen-max for this activation).
- *
- * `activationTime` is the cache key — when it changes (window reload), the
- * ratchet effectively resets because the new key has no prior entry. We do
- * not bother to evict stale entries; the map grows by 1 per VS Code window
- * lifetime, which is bounded and negligible.
- *
- * If `activationTime` is unset (e.g. tests or older callers), ratcheting is
- * disabled and the candidate value passes through unchanged — those call
- * sites either don't care about live UX (tests) or pre-date the live-tick
- * path that exposes the flicker.
- */
-function applySessionAICRatchet(activationTime: string | undefined, candidate: number): number {
-  if (!activationTime) {
-    return candidate;
-  }
-  const prev = _sessionAICRatchet.get(activationTime) ?? 0;
-  const next = candidate > prev ? candidate : prev;
-  if (next !== prev) {
-    _sessionAICRatchet.set(activationTime, next);
-  }
-  return next;
-}
+// NOTE: a per-activation monotonic ratchet on `liveOtel.sessionAIC` was
+// removed (was `applySessionAICRatchet` keyed by `activationTime`). It
+// existed to suppress visible decreases like 147 → 138 when the per-model
+// debug-log overlay replaced a rate-table over-estimate (Anthropic Opus
+// OTel traces ship without cache attributes, so the estimate over-counts).
+//
+// Combined with `Math.max(otelEstimate, debugTruth)` below, the ratchet
+// caused a logical impossibility: `liveOtel.sessionAIC` could exceed
+// `aicSummary.totalCredits` even though session turns are a strict subset
+// of cycle turns (so session credits MUST be ≤ cycle credits). Brief
+// estimate→truth correction is honest UX; an impossible inversion is not.
+//
+// `sessionAIC` is now reconciled at request level: flushed calls come from
+// authoritative debug-log `copilotUsageNanoAiu`, while not-yet-flushed live
+// OTel calls are added as temporary estimates.
 
 export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null, aicConfig?: AICConfig, agentScan?: AgentScanResult, activationTime?: string): DashboardData {
   // Create AIC calculator early so it can be used in session views
@@ -436,51 +522,105 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
     //      sessionAIC). This makes per-model credits API-exact instead of
     //      estimated for every model the user actually billed today.
     const todayDate = new Date().toISOString().slice(0, 10);
-    const exactByModelAiu = new Map<string, number>();
-    for (const t of scan.turns) {
-      if (!t.timestamp || t.timestamp.slice(0, 10) !== todayDate) {
-        continue;
+    const debugTurnsToday = scan.turns.filter(
+      t =>
+        t.timestamp &&
+        t.timestamp.slice(0, 10) === todayDate &&
+        t.debugAicCredits > 0 &&
+        (!activationTime || t.timestamp >= activationTime)
+    );
+    const debugRequestsToday = debugRequestsInWindow(scan.turns, todayDate, activationTime);
+
+    const exactByModel = new Map<string, { model: string; prompt: number; output: number; cached: number; calls: number; nanoAiu: number }>();
+    const addExactModel = (model: string, prompt: number, output: number, cached: number, calls: number, nanoAiu: number) => {
+      const key = model.toLowerCase();
+      const row = exactByModel.get(key) ?? { model, prompt: 0, output: 0, cached: 0, calls: 0, nanoAiu: 0 };
+      row.prompt += prompt;
+      row.output += output;
+      row.cached += cached;
+      row.calls += calls;
+      row.nanoAiu += nanoAiu;
+      exactByModel.set(key, row);
+    };
+
+    let debugSessionAIC = 0;
+    if (debugRequestsToday.length > 0) {
+      for (const req of debugRequestsToday) {
+        debugSessionAIC += req.nanoAiu / 1e9;
+        addExactModel(req.model, req.prompt, req.output, req.cached, 1, req.nanoAiu);
       }
-      if (activationTime && t.timestamp < activationTime) {
-        continue;
-      }
-      if (!t.debugByModel) {
-        continue;
-      }
-      for (const [model, mt] of Object.entries(t.debugByModel)) {
-        if (typeof mt.nanoAiu !== "number" || mt.nanoAiu <= 0) {
-          continue;
+    } else {
+      for (const t of debugTurnsToday) {
+        debugSessionAIC += t.debugAicCredits;
+        if (t.debugByModel) {
+          for (const [model, mt] of Object.entries(t.debugByModel)) {
+            addExactModel(model, mt.prompt, mt.output, mt.cached, mt.calls, mt.nanoAiu);
+          }
+        } else {
+          addExactModel(
+            t.modelFamily || "unknown",
+            t.debugPromptTokens || t.promptTokens,
+            t.debugOutputTokens || t.outputTokens,
+            t.debugCachedTokens || 0,
+            Math.max(1, t.debugLlmCalls || 0),
+            t.debugAicCredits * 1e9,
+          );
         }
-        const key = model.toLowerCase();
-        exactByModelAiu.set(key, (exactByModelAiu.get(key) ?? 0) + mt.nanoAiu);
       }
     }
 
-    const byModel = Array.from(liveStats.byModel.values()).map(m => {
-      const exactNano = exactByModelAiu.get(m.model.toLowerCase());
-      const estimate = calculator.calculateCredits(m.model, m.prompt, m.completion, m.cached, m.cacheWrite).totalCredits;
-      // Prefer API-exact when this model has any billed AIU today; otherwise
-      // keep the rate-table estimate so newly-seen models still show a value.
-      const credits = typeof exactNano === "number" && exactNano > 0 ? exactNano / 1e9 : estimate;
+    const liveRequestLog = liveStats.requestLog ?? [];
+    const pendingRequests = unflushedOtelRequests(liveRequestLog, debugRequestsToday, todayDate, activationTime);
+    const pendingByModel = new Map<string, { model: string; requests: number; prompt: number; completion: number; cached: number; cacheWrite: number; credits: number }>();
+    for (const req of pendingRequests) {
+      const key = req.modelName.toLowerCase();
+      const row = pendingByModel.get(key) ?? {
+        model: req.modelName,
+        requests: 0,
+        prompt: 0,
+        completion: 0,
+        cached: 0,
+        cacheWrite: 0,
+        credits: 0,
+      };
+      row.requests++;
+      row.prompt += req.promptTokens;
+      row.completion += req.completionTokens;
+      row.cached += req.cachedTokens;
+      row.cacheWrite += req.cacheWriteTokens;
+      row.credits += otelRequestCredits(calculator, req);
+      pendingByModel.set(key, row);
+    }
+
+    const byModelKeys = new Set<string>([
+      ...Array.from(liveStats.byModel.keys(), k => k.toLowerCase()),
+      ...exactByModel.keys(),
+      ...pendingByModel.keys(),
+    ]);
+    const byModel = Array.from(byModelKeys).map(key => {
+      const live = Array.from(liveStats.byModel.values()).find(m => m.model.toLowerCase() === key);
+      const exact = exactByModel.get(key);
+      const pending = pendingByModel.get(key);
+      const fallbackEstimate = live
+        ? calculator.calculateCredits(live.model, live.prompt, live.completion, live.cached, live.cacheWrite).totalCredits
+        : 0;
+      const reconciledCredits = (exact ? exact.nanoAiu / 1e9 : 0) + (pending?.credits ?? 0);
+      const credits = reconciledCredits > 0 ? reconciledCredits : fallbackEstimate;
       return {
-        model: m.model,
-        requests: m.requests,
-        prompt: m.prompt,
-        completion: m.completion,
-        traceCached: m.traceCached,
-        metricCached: m.metricCached,
-        cached: m.cached,
-        aicCredits: Math.round(credits * 100) / 100,
+        model: live?.model ?? exact?.model ?? pending?.model ?? "unknown",
+        requests: live?.requests ?? (exact?.calls ?? 0) + (pending?.requests ?? 0),
+        prompt: live?.prompt ?? (exact?.prompt ?? 0) + (pending?.prompt ?? 0),
+        completion: live?.completion ?? (exact?.output ?? 0) + (pending?.completion ?? 0),
+        traceCached: live?.traceCached ?? (exact?.cached ?? 0) + (pending?.cached ?? 0),
+        metricCached: live?.metricCached ?? 0,
+        cached: live?.cached ?? (exact?.cached ?? 0) + (pending?.cached ?? 0),
+        aicCredits: roundCredits(credits),
       };
     });
-    // Compute session-cumulative AIC from live OTel (sum of per-model credits).
-    // When the debug-log overlay landed on every row this is API-exact; when
-    // some models fell back to rate estimates it's a hybrid -- the explicit
-    // debug-log overlay below still has a chance to tighten the final number.
-    let sessionAIC = 0;
-    for (const row of byModel) {
-      sessionAIC += row.aicCredits;
-    }
+    const pendingSessionAIC = Array.from(pendingByModel.values()).reduce((sum, row) => sum + row.credits, 0);
+    let sessionAIC = debugTurnsToday.length > 0
+      ? debugSessionAIC + pendingSessionAIC
+      : byModel.reduce((sum, row) => sum + row.aicCredits, 0);
     // Compute last request AIC from OTel data
     let lastRequestAIC = 0;
     if (liveStats.lastRequest) {
@@ -501,36 +641,29 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
     // main.jsonl (the calendar-day filter alone matched all of today's
     // sessions across reloads), so `AIC (sess)` showed thousands of credits
     // while `AIC (last req)` correctly showed the single new request.
-    const debugTurnsToday = scan.turns.filter(
-      t =>
-        t.timestamp &&
-        t.timestamp.slice(0, 10) === todayDate &&
-        t.debugAicCredits > 0 &&
-        (!activationTime || t.timestamp >= activationTime)
-    );
-    if (debugTurnsToday.length > 0) {
-      // sessionAIC: take the larger of (OTel-derived, debug-log today sum) to
-      // avoid regressing when OTel has newer in-flight requests not yet flushed.
-      const debugSessionAIC = debugTurnsToday.reduce((s, t) => s + t.debugAicCredits, 0);
-      sessionAIC = Math.max(sessionAIC, debugSessionAIC);
-
-      // lastRequestAIC: pick the turn whose LAST individual llm_request is
-      // most recent, then use that single request's AIC — not the turn total.
-      // (A turn with 15 tool calls has 15 llm_request entries; summing them
-      // would show ~10x the actual just-finished API call's bill.) Falls back
-      // to the turn-total `debugAicCredits` if per-request data is missing.
-      const mostRecentDebug = debugTurnsToday.reduce((best, t) => {
-        const tTs = t.debugLastRequestTs || t.timestamp;
-        const bTs = best ? best.debugLastRequestTs || best.timestamp : "";
-        return !best || tTs > bTs ? t : best;
-      }, undefined as Turn | undefined);
+    if (debugRequestsToday.length > 0 || debugTurnsToday.length > 0) {
+      // lastRequestAIC: prefer the newest individual llm_request so a tool-heavy
+      // turn shows one API call's bill, not the whole turn sum.
+      const mostRecentRequest = latestDebugRequest(debugRequestsToday);
       const otelLastTs = liveStats.lastRequest?.timestamp ?? "";
-      if (mostRecentDebug) {
-        const debugTs = mostRecentDebug.debugLastRequestTs || mostRecentDebug.timestamp;
+      if (mostRecentRequest) {
+        const debugTs = mostRecentRequest.timestamp;
         if (debugTs >= otelLastTs || lastRequestAIC === 0) {
-          lastRequestAIC = mostRecentDebug.debugLastRequestAic > 0
-            ? mostRecentDebug.debugLastRequestAic
-            : mostRecentDebug.debugAicCredits;
+          lastRequestAIC = mostRecentRequest.nanoAiu / 1e9;
+        }
+      } else {
+        const mostRecentDebug = debugTurnsToday.reduce((best, t) => {
+          const tTs = t.debugLastRequestTs || t.timestamp;
+          const bTs = best ? best.debugLastRequestTs || best.timestamp : "";
+          return !best || tTs > bTs ? t : best;
+        }, undefined as Turn | undefined);
+        if (mostRecentDebug) {
+          const debugTs = mostRecentDebug.debugLastRequestTs || mostRecentDebug.timestamp;
+          if (debugTs >= otelLastTs || lastRequestAIC === 0) {
+            lastRequestAIC = mostRecentDebug.debugLastRequestAic > 0
+              ? mostRecentDebug.debugLastRequestAic
+              : mostRecentDebug.debugAicCredits;
+          }
         }
       }
     }
@@ -545,7 +678,12 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
       lastSeen: liveStats.lastSeen,
       source: "otel",
       byModel,
-      sessionAIC: applySessionAICRatchet(activationTime, Math.round(sessionAIC * 100) / 100),
+      // No ratchet: when the API-exact debug-log value replaces a rate-table
+      // over-estimate, sessionAIC must be allowed to decrease — otherwise it
+      // can exceed `aicSummary.totalCredits` (the cycle truth), violating the
+      // session ⊆ cycle invariant. A brief flicker on estimate→truth is
+      // honest UX; an impossible inversion is not.
+      sessionAIC: Math.round(sessionAIC * 100) / 100,
       lastRequestAIC: Math.round(lastRequestAIC * 100) / 100,
     };
   } else {
@@ -560,8 +698,82 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
         (t.debugPromptTokens > 0 || t.debugOutputTokens > 0) &&
         (!activationTime || t.timestamp >= activationTime)
     );
+    const debugRequestsToday = debugRequestsInWindow(scan.turns, today, activationTime);
 
-    if (debugTurnsToday.length > 0) {
+    if (debugRequestsToday.length > 0) {
+      const byModelMap = new Map<
+        string,
+        {
+          model: string;
+          requests: number;
+          prompt: number;
+          completion: number;
+          traceCached: number;
+          metricCached: number;
+          cached: number;
+          aicCredits: number;
+        }
+      >();
+      const getOrCreateRow = (model: string) => {
+        let row = byModelMap.get(model);
+        if (!row) {
+          row = {
+            model,
+            requests: 0,
+            prompt: 0,
+            completion: 0,
+            traceCached: 0,
+            metricCached: 0,
+            cached: 0,
+            aicCredits: 0,
+          };
+          byModelMap.set(model, row);
+        }
+        return row;
+      };
+      let requests = 0;
+      let prompt = 0;
+      let completion = 0;
+      let cached = 0;
+      let lastSeen = "";
+      let sessionAIC = 0;
+
+      for (const req of debugRequestsToday) {
+        requests++;
+        prompt += req.prompt;
+        completion += req.output;
+        cached += req.cached;
+        sessionAIC += req.nanoAiu / 1e9;
+        if (req.timestamp > lastSeen) {
+          lastSeen = req.timestamp;
+        }
+        const row = getOrCreateRow(req.model);
+        row.requests += 1;
+        row.prompt += req.prompt;
+        row.completion += req.output;
+        row.traceCached += req.cached;
+        row.cached += req.cached;
+        row.aicCredits += req.nanoAiu / 1e9;
+      }
+
+      const mostRecentRequest = latestDebugRequest(debugRequestsToday);
+      liveOtel = {
+        requests,
+        prompt,
+        completion,
+        cached,
+        traceCached: cached,
+        metricCached: 0,
+        lastSeen,
+        source: "debug-log",
+        byModel: Array.from(byModelMap.values()).map(row => ({
+          ...row,
+          aicCredits: Math.round(row.aicCredits * 100) / 100,
+        })),
+        sessionAIC: Math.round(sessionAIC * 100) / 100,
+        lastRequestAIC: Math.round(((mostRecentRequest?.nanoAiu ?? 0) / 1e9) * 100) / 100,
+      };
+    } else if (debugTurnsToday.length > 0) {
       // Per-model accumulator. `aicCredits` is summed from the per-llm_request
       // billed value (`debugByModel[*].credits` from copilotUsageNanoAiu) when
       // available; otherwise falls back to a calculator estimate at finalize
@@ -718,7 +930,8 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
           ...row,
           aicCredits: Math.round(row.aicCredits * 100) / 100,
         })),
-        sessionAIC: applySessionAICRatchet(activationTime, Math.round(sessionAIC * 100) / 100),
+        // No ratchet — see OTel branch above for rationale.
+        sessionAIC: Math.round(sessionAIC * 100) / 100,
         lastRequestAIC: Math.round(lastRequestAIC * 100) / 100,
       };
     } else {
@@ -744,7 +957,12 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
   // Build credit entries from turns (prefer debug-log actuals)
   // ONLY include turns on or after AIC effective date (June 1, 2026)
   // If turns have debugAicCredits (actual API-reported AIC), use those directly
-  const aicTurns = scan.turns.filter(t => t.timestamp && t.timestamp.slice(0, 10) >= AIC_EFFECTIVE_DATE);
+  const aicTurns = scan.turns.filter(t => {
+    if (t.debugRequests?.some(req => req.timestamp && req.timestamp.slice(0, 10) >= AIC_EFFECTIVE_DATE)) {
+      return true;
+    }
+    return !!t.timestamp && t.timestamp.slice(0, 10) >= AIC_EFFECTIVE_DATE;
+  });
 
   // Check if we have actual AIC data from the API
   const hasActualAic = aicTurns.some(t => t.debugAicCredits > 0);
@@ -766,8 +984,26 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
     actualCredits?: number;
   }> = [];
   for (const t of aicTurns) {
-    const date = t.timestamp.slice(0, 10);
-    if (t.debugByModel) {
+    if (t.debugRequests && t.debugRequests.length > 0) {
+      for (const req of t.debugRequests) {
+        if (!req.timestamp) {
+          continue;
+        }
+        const date = req.timestamp.slice(0, 10);
+        if (date < AIC_EFFECTIVE_DATE) {
+          continue;
+        }
+        creditEntries.push({
+          model: req.model,
+          inputTokens: req.prompt,
+          outputTokens: req.output,
+          cachedTokens: req.cached,
+          date,
+          actualCredits: req.nanoAiu > 0 ? req.nanoAiu / 1_000_000_000 : undefined,
+        });
+      }
+    } else if (t.timestamp && t.debugByModel) {
+      const date = t.timestamp.slice(0, 10);
       for (const [model, mt] of Object.entries(t.debugByModel)) {
         creditEntries.push({
           model,
@@ -778,7 +1014,8 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
           actualCredits: mt.nanoAiu > 0 ? mt.nanoAiu / 1_000_000_000 : undefined,
         });
       }
-    } else {
+    } else if (t.timestamp) {
+      const date = t.timestamp.slice(0, 10);
       creditEntries.push({
         model: t.modelFamily || "unknown",
         inputTokens: t.debugPromptTokens || t.promptTokens,
@@ -794,27 +1031,42 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
   // Add live OTel data if available (these have cached token info)
   // Only include if current date is on/after AIC effective date
   // IMPORTANT: OTel data may overlap with scanner data for the current session.
-  // To avoid double-counting, we only add OTel data if the scanner found NO turns
-  // for today. If scanner already has today's data, it's more complete (has per-turn
-  // granularity) — OTel would just duplicate it without the cached breakdown.
+  // Scanner/debug-log rows carry exact API-billed credits once flushed; OTel rows
+  // are only used for live requests that do not match an individual flushed
+  // debug-log request yet.
   const todayStr = new Date().toISOString().slice(0, 10);
-  // Models already covered by scanner data for today — avoid double-counting these
-  const scanModelsToday = new Set(
-    creditEntries.filter(e => e.date === todayStr).map(e => e.model.toLowerCase())
-  );
   if (liveStats && liveStats.requests > 0 && todayStr >= AIC_EFFECTIVE_DATE) {
-    for (const m of liveStats.byModel.values()) {
-      // Skip models already in today's scanner data (would double-count).
-      // Always add models that only appear in OTel (scanner hasn't seen them).
-      if (scanModelsToday.has(m.model.toLowerCase())) { continue; }
-      creditEntries.push({
-        model: m.model,
-        inputTokens: m.prompt,
-        outputTokens: m.completion,
-        cachedTokens: m.cached,
-        date: todayStr,
-        actualCredits: undefined,
-      });
+    const liveRequestLog = liveStats.requestLog ?? [];
+    if (liveRequestLog.length > 0) {
+      const debugRequestsToday = debugRequestsFromTurns(aicTurns).filter(
+        req => req.timestamp && req.timestamp.slice(0, 10) === todayStr
+      );
+      for (const req of unflushedOtelRequests(liveRequestLog, debugRequestsToday, todayStr)) {
+        creditEntries.push({
+          model: req.modelName,
+          inputTokens: req.promptTokens,
+          outputTokens: req.completionTokens,
+          cachedTokens: req.cachedTokens,
+          date: todayStr,
+          actualCredits: undefined,
+        });
+      }
+    } else {
+      const scanModelsToday = new Set(
+        creditEntries.filter(e => e.date === todayStr).map(e => e.model.toLowerCase())
+      );
+      for (const m of liveStats.byModel.values()) {
+        // Legacy fallback for callers that provide aggregate-only LiveStats.
+        if (scanModelsToday.has(m.model.toLowerCase())) { continue; }
+        creditEntries.push({
+          model: m.model,
+          inputTokens: m.prompt,
+          outputTokens: m.completion,
+          cachedTokens: m.cached,
+          date: todayStr,
+          actualCredits: undefined,
+        });
+      }
     }
   }
 

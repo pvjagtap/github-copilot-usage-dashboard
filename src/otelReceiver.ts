@@ -25,6 +25,8 @@ export interface LiveStats {
   metricCached: number;
   lastSeen: string;
   byModel: Map<string, ModelStats>;
+  /** Retained OTel requests for request-level reconciliation with debug-log truth. */
+  requestLog: readonly OTelRequest[];
   /** The most recent OTel request (for per-request credit display) */
   lastRequest: OTelRequest | null;
 }
@@ -365,6 +367,7 @@ export class OTelReceiver {
       metricCached,
       lastSeen: this.requests.length > 0 ? this.requests[this.requests.length - 1].timestamp : "",
       byModel,
+      requestLog: this.requests.slice(),
       lastRequest: this.requests.length > 0 ? this.requests[this.requests.length - 1] : null,
     };
   }

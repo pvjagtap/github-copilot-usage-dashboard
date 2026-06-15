@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.9] - 2026-06-15
+
+### Fixed
+
+- **`liveOtel.sessionAIC` can no longer exceed `aicSummary.totalCredits`.** The v1.10.7 combination of `Math.max(otelEstimate, debugTruth)` and `_sessionAICRatchet` (monotonic high-water mark) caused `sessionAIC` to permanently lock in over-estimated values, violating the invariant that session credits ≤ cycle credits (visible as `AIC (sess) 12.96 > AI Credits Spent 11.9`).
+  - Removed `applySessionAICRatchet` and the `_sessionAICRatchet` map entirely.
+  - Removed `Math.max(sessionAIC, debugSessionAIC)` — session AIC is now computed additively from authoritative sources only.
+  - `sessionAIC` = Σ flushed debug-log `copilotUsageNanoAiu` + Σ rate-table estimates for unflushed OTel requests only.
+
+- **OTel↔debug-log reconciliation rewritten with count-based per-model-family matching.** The previous per-model overlay (`exactByModelAiu` map summing `nanoAiu` per model key) was replaced with request-level deduplication via `unflushedOtelRequests()`:
+  - Groups both OTel and debug-log requests by model family (via `modelFamily()` which strips version suffixes like `.6`/`.7` and date suffixes like `-2024.07.18`).
+  - For each family: if debug log has N requests and OTel has M, the newest (M − N) OTel requests are "pending" — all others are considered already flushed.
+  - Handles model version aliasing (OTel reports request model `claude-opus-4.6`, debug-log records response model `claude-opus-4.7`) without false double-counting.
+
+- **Per-model `byModel` array in `liveOtel` now merges all three sources** (live OTel aggregates, exact debug-log per-request data, pending OTel estimates) instead of only iterating `liveStats.byModel.values()`. Models that appear only in debug logs or only in pending OTel now surface correctly.
+
+- **`lastRequestAIC` uses individual request nanoAiu** instead of turn-total `debugAicCredits`. A 15-tool-call turn no longer shows the sum of all 15 API calls as "last request" — it shows the single most recent `llm_request`.
+
+- **Child-log merging now accumulates `cachedTotal`** into the parent turn (was previously omitted, causing cache token under-count for subagent/title child logs).
+
+- **Child-log requests update parent turn timestamps** (`lastRequestTs`, `lastRequestNanoAiu`, `timestamp`) so the parent turn correctly reflects the most recent API call across all child logs.
+
+- **Credit entries iterate individual `debugRequests`** when available, attributing each `llm_request` to its own timestamp/date. Fixes UTC day-boundary drift where a multi-request turn spanning midnight would attribute all credits to the turn's latest timestamp.
+
+- **OTel→credit-entry deduplication uses `unflushedOtelRequests()`** instead of the old model-set exclusion (`scanModelsToday`), preventing double-counting when the same model appears in both debug logs and live OTel.
+
+- **`verify-dashboard-vs-api.js` assertions account for rate-table fallback turns** (turns with chatSession token counts but no debug-log `nanoAiu`). Previously these caused false assertion failures; now tracked separately as `fallbackCredits` and included in truth totals.
+
+### Added
+
+- **`DebugRequest` interface** (`src/scanner.ts`) — captures individual `llm_request` fields: `timestamp`, `model`, `prompt`, `output`, `cached`, `nanoAiu`.
+- **`Turn.debugRequests?: DebugRequest[]`** — per-turn array of individual API calls, populated from debug-log parsing and child-log merging.
+- **`LiveStats.requestLog: readonly OTelRequest[]`** (`src/otelReceiver.ts`) — full retained OTel request array exposed for request-level reconciliation.
+- **`unflushedOtelRequests()`** — count-based per-model-family reconciliation function.
+- **`modelFamily()`** — normalizes model names for fuzzy matching (strips versions/dates).
+- **`debugRequestsFromTurns()` / `debugRequestsInWindow()` / `latestDebugRequest()`** — helper functions for extracting and filtering debug requests across turns.
+- **`tests/verify-live-aic-reconciliation.js`** — unit test covering: basic debug+pending reconciliation, count-based matching with 2 flushed + 1 pending, and model version aliasing (4.6 vs 4.7).
+
 ## [1.10.7] - 2026-06-14
 
 ### Fixed
