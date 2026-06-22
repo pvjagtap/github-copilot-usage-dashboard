@@ -152,12 +152,23 @@ export const DEFAULT_MODEL_COSTS: ModelCostRate[] = [
 ];
 
 // ─── Default Plan Configurations ──────────────────────────────
-
-// ─── Default Plan Configurations ──────────────────────────────
-// Source: https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-organizations-and-enterprises
+// Sources (verified live against docs.github.com):
+//   • Individuals: https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-individuals
+//   • Org/Enterprise: https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-organizations-and-enterprises
 //
-// 1 AI credit = $0.01 USD. Credits are pooled per billing entity.
-// Promotional period (June 1 – September 1, 2026): Business=3000, Enterprise=7000.
+// 1 AI credit = $0.01 USD.
+//
+// Individual plans (Pro / Pro+ / Max) include a "base credits" amount plus a
+// "flex allotment" — both count toward the monthly total reported here:
+//   Pro   = 1,000 base + 500 flex  = 1,500 total
+//   Pro+  = 3,900 base + 3,100 flex = 7,000 total
+//   Max   = 10,000 base + 10,000 flex = 20,000 total
+//
+// Organization plans (Business / Enterprise) pool credits at the billing
+// entity level. Promotional uplift (June 1 – Sept 1, 2026) applies ONLY to
+// existing Business and Enterprise customers — NOT to Free / Pro / Pro+ / Max.
+//   Business    standard = 1,900 / promo = 3,000 (per user/month, pooled)
+//   Enterprise  standard = 3,900 / promo = 7,000 (per user/month, pooled)
 
 export const DEFAULT_PLANS: Record<string, PlanConfig> = {
   business: {
@@ -188,24 +199,34 @@ export const DEFAULT_PLANS: Record<string, PlanConfig> = {
     overageCostPerCredit: 0.01,
     billingCycleStartDay: 1,
   },
+  max: {
+    planName: "max",
+    includedPremiumRequests: 3000,
+    monthlyCreditsIncluded: 20000, // Copilot Max: 10,000 base + 10,000 flex = 20,000
+    overageCostPerCredit: 0.01,
+    billingCycleStartDay: 1,
+  },
   pro_plus: {
     planName: "pro_plus",
     includedPremiumRequests: 1500,
-    monthlyCreditsIncluded: 7500, // Copilot Pro+ (individual)
+    monthlyCreditsIncluded: 7000, // Copilot Pro+: 3,900 base + 3,100 flex = 7,000
     overageCostPerCredit: 0.01,
     billingCycleStartDay: 1,
   },
   pro: {
     planName: "pro",
     includedPremiumRequests: 300,
-    monthlyCreditsIncluded: 1000, // Copilot Pro (individual)
+    monthlyCreditsIncluded: 1500, // Copilot Pro: 1,000 base + 500 flex = 1,500
     overageCostPerCredit: 0.01,
     billingCycleStartDay: 1,
   },
   free: {
     planName: "free",
     includedPremiumRequests: 0,
-    monthlyCreditsIncluded: 250, // Copilot Free
+    // Copilot Free: docs state an unspecified AI credits allowance plus 2,000
+    // completions/month. GitHub has not published an official number, so 250
+    // is a conservative placeholder. Override via copilotUsage.aic.monthlyCreditsIncluded.
+    monthlyCreditsIncluded: 250,
     overageCostPerCredit: 0,    // no overage on free — usage blocked
     billingCycleStartDay: 1,
   },

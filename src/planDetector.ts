@@ -34,21 +34,21 @@ const LAST_DETECTED_SKU_KEY = "copilotUsage.aic.lastDetectedSku";
 
 type LogFn = (msg: string) => void;
 
-export type DetectedPlan = "free" | "pro" | "pro_plus" | "business" | "enterprise";
+export type DetectedPlan = "free" | "pro" | "pro_plus" | "max" | "business" | "enterprise";
 
 /**
  * Map a GitHub Copilot SKU string to our plan key. SKUs observed in the
  * wild include `copilot_for_business_seat`, `copilot_enterprise_seat`,
- * `copilot_pro_seat`, `copilot_pro_plus_seat`, `free_*`. We match on
- * substrings so future SKU renames do not silently break detection.
+ * `copilot_pro_seat`, `copilot_pro_plus_seat`, `copilot_max_seat`, `free_*`.
+ * We match on substrings so future SKU renames do not silently break detection.
  */
 export function skuToPlan(sku: string | undefined | null): DetectedPlan | null {
   if (!sku) {
     return null;
   }
   const s = sku.toLowerCase();
-  // Order matters: pro_plus must be checked before pro, business before
-  // free, enterprise before business.
+  // Order matters: pro_plus must be checked before pro, max before business
+  // (no overlap currently but defensive), enterprise before business.
   if (s.includes("enterprise")) {
     return "enterprise";
   }
@@ -57,6 +57,9 @@ export function skuToPlan(sku: string | undefined | null): DetectedPlan | null {
   }
   if (s.includes("pro_plus") || s.includes("proplus") || s.includes("pro-plus")) {
     return "pro_plus";
+  }
+  if (s.includes("max")) {
+    return "max";
   }
   if (s.includes("pro")) {
     return "pro";
@@ -153,17 +156,18 @@ async function showPickerFallback(
   hasGitHubAccount: boolean
 ): Promise<void> {
   const choices: Array<vscode.QuickPickItem & { plan: DetectedPlan }> = [
-    { label: "Copilot Free", description: "250 credits / month", plan: "free" },
-    { label: "Copilot Pro", description: "$10/mo — 1,000 credits", plan: "pro" },
-    { label: "Copilot Pro+", description: "$39/mo — 7,500 credits", plan: "pro_plus" },
+    { label: "Copilot Free", description: "2,000 completions / month (no credit allowance published)", plan: "free" },
+    { label: "Copilot Pro", description: "$10/mo — 1,500 credits (1,000 base + 500 flex)", plan: "pro" },
+    { label: "Copilot Pro+", description: "$39/mo — 7,000 credits (3,900 base + 3,100 flex)", plan: "pro_plus" },
+    { label: "Copilot Max", description: "$100/mo — 20,000 credits (10,000 base + 10,000 flex)", plan: "max" },
     {
       label: "Copilot Business",
-      description: "$19/user/mo — 1,900 credits (pooled)",
+      description: "$19/user/mo — 1,900 credits (pooled). Jun–Sep 2026 promo: 3,000.",
       plan: "business",
     },
     {
       label: "Copilot Enterprise",
-      description: "$39/user/mo — 3,900 credits (pooled)",
+      description: "$39/user/mo — 3,900 credits (pooled). Jun–Sep 2026 promo: 7,000.",
       plan: "enterprise",
     },
   ];

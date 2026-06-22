@@ -2,7 +2,7 @@
   "name": "copilot-usage-dashboard",
   "displayName": "Copilot Usage Dashboard",
   "description": "Live token usage dashboard for GitHub Copilot — prompt, output, and cached tokens with full analytics.",
-  "version": "1.10.10",
+  "version": "1.10.11",
   "publisher": "pvjagtap",
   "icon": "images/icon.png",
   "license": "MIT",
@@ -140,21 +140,23 @@
               "free",
               "pro",
               "pro_plus",
+              "max",
               "business",
               "business_promo",
               "enterprise",
               "enterprise_promo"
             ],
             "enumDescriptions": [
-              "Free tier (250 credits/month)",
-              "Pro — $10/month (1,000 credits)",
-              "Pro+ — $39/month (7,500 credits)",
-              "Business — $19/user/month (1,900 credits/user, pooled)",
-              "Business Promo — June–Sept 2026 (3,000 credits/user, pooled)",
-              "Enterprise — $39/user/month (3,900 credits/user, pooled)",
-              "Enterprise Promo — June–Sept 2026 (7,000 credits/user, pooled)"
+              "Free — 2,000 completions/month (no published credit allowance)",
+              "Pro — $10/month (1,500 credits: 1,000 base + 500 flex)",
+              "Pro+ — $39/month (7,000 credits: 3,900 base + 3,100 flex)",
+              "Max — $100/month (20,000 credits: 10,000 base + 10,000 flex)",
+              "Business — $19/user/month (1,900 credits/user, pooled). Promo applies to business_promo.",
+              "Business Promo — June–Sept 2026 (3,000 credits/user, pooled). Existing Business customers only.",
+              "Enterprise — $39/user/month (3,900 credits/user, pooled). Promo applies to enterprise_promo.",
+              "Enterprise Promo — June–Sept 2026 (7,000 credits/user, pooled). Existing Enterprise customers only."
             ],
-            "description": "Your GitHub Copilot plan. Determines included monthly AI credits per user."
+            "description": "Your GitHub Copilot plan. Determines included monthly AI credits. Promotional uplift (June–Sept 2026) applies only to existing Business/Enterprise customers, not to Free/Pro/Pro+/Max."
           },
           "copilotUsage.aic.autoDetectPlan": {
             "type": "boolean",

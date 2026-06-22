@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.11] - 2026-06-22
+
+### Fixed
+
+- **Per-plan monthly AI Credits corrected against official GitHub docs.** The defaults previously assumed every individual user gets a similar credit pool; this caused incorrect budget / overage / projection numbers for non-Business plans.
+  - **Copilot Pro**: `1,000` → **`1,500`** (1,000 base + 500 flex).
+  - **Copilot Pro+**: `7,500` → **`7,000`** (3,900 base + 3,100 flex).
+  - **Copilot Max** (new, $100/mo): **`20,000`** (10,000 base + 10,000 flex). Added to plan defaults, settings enum, SKU detector, and manual picker.
+  - **Copilot Free**: `250` retained as conservative placeholder (GitHub does not publish a specific credit allowance for Free; primary inclusion is 2,000 completions/month).
+  - **Copilot Business / Enterprise** unchanged: `1,900` / `3,900` per user (pooled).
+
+### Clarified
+
+- **Promotional uplift scope.** The June 1 – September 1, 2026 promotional bump (Business `3,000`, Enterprise `7,000`) applies **only to existing Copilot Business and Copilot Enterprise customers**. Individual plans (Free, Pro, Pro+, Max) get no promotional bump. Settings descriptions, picker descriptions, and source-of-truth comments updated accordingly.
+
 ## [1.10.10] - 2026-06-15
 
 ### Fixed
