@@ -286,5 +286,223 @@ are best-effort and silent on failure.</p>
   <code>hasActualCredits</code>) still outrank the catalog.</li>
 </ul>
 
+<hr>
+
+<h1>GitHub Copilot CLI (<code>@github/copilot</code>) Live Usage Integration</h1>
+
+<p><strong>Goal:</strong> add the standalone Copilot CLI as a fourth source
+alongside VS Code chat sessions, Oh My Pi, and Pi &mdash; with the same
+billing-period filter, the same shared AIC budget, and the same per-source
+column in the dashboard.</p>
+
+<h2>Design decisions (where the spec was ambiguous)</h2>
+
+<table>
+  <thead><tr><th>Decision</th><th>What we chose</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Which signal is authoritative for AIC?</td>
+      <td>Hybrid: <code>session.shutdown.data.modelMetrics.{m}.requests.cost</code>
+      when present, else live-walk estimate (<code>prompts &times; multiplier</code>).</td>
+      <td>The diagnostic in <code>tests/diagnose-copilot-cli.mjs</code>
+      found <strong>4 of 8</strong> sampled sessions had no
+      <code>session.shutdown</code> event (crash, Ctrl-C, still-open).
+      Ledger-only would silently drop ~50% of CLI activity.
+      Live-only is ~5% imprecise on clean sessions because it can't see
+      the CLI's actual rounded cost. Picking the per-model winner
+      reconciles to the GitHub bill on shutdown sessions and recovers
+      ~50% of otherwise-invisible spend on the rest.</td>
+    </tr>
+    <tr>
+      <td>Which model do we attribute a prompt to?</td>
+      <td><code>assistant.message.data.model</code> (most-recent response),
+      falling back to <code>session.start.selectedModel</code> only before
+      the first response of the session lands.</td>
+      <td>Two sampled sessions selected <code>claude-haiku-4-5</code> in the UI but
+      <code>session.shutdown</code> showed
+      <code>claude-sonnet-4.6</code> was actually billed
+      (silent fallback / routing). The assistant-side <code>model</code>
+      reflects what GitHub bills.</td>
+    </tr>
+    <tr>
+      <td>How is the multiplier resolved?</td>
+      <td><code>classifyByCatalog(model).multiplier</code> (CAPI live data) wins;
+      built-in <code>FALLBACK_MULTIPLIERS</code> table covers the first scan
+      before the catalog finishes loading.</td>
+      <td>Re-uses the same authoritative source the rest of the extension
+      uses for billable classification &mdash; no duplicate rate table to
+      drift out of sync. The fallback table mirrors what's published at
+      docs.github.com/en/copilot/concepts/billing/copilot-requests.</td>
+    </tr>
+    <tr>
+      <td>How do CLI credits enter the calculator?</td>
+      <td><code>creditEntries.push({ actualCredits, billable, model, &hellip; tokens: 0 })</code>
+      &mdash; same path OMP/Pi take when they have a known credit value.</td>
+      <td>The CLI bills per <em>prompt &times; multiplier</em>, not per
+      token. Token fields stay at 0 so they don't inflate the input/output
+      credit subtotals; the calculator sees only the final AIC number.</td>
+    </tr>
+    <tr>
+      <td>Slash-command filter</td>
+      <td>Strict regex <code>/^\/[A-Za-z][\w-]*\b/</code> after trim.</td>
+      <td>Loose <code>startsWith('/')</code> would have matched filesystem
+      paths a user pastes for context (<code>/usr/local/bin/&hellip;</code>),
+      undercounting billable prompts.</td>
+    </tr>
+    <tr>
+      <td>Reconciliation residual</td>
+      <td><code>vscodeAicCredits = total &minus; omp &minus; pi &minus; cli</code></td>
+      <td>The four source columns must sum exactly to the headline AIC
+      total &mdash; same invariant the OMP/Pi columns already satisfy.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>Deliberate non-additions</h2>
+
+<ul>
+  <li><strong>We do NOT read <code>~/.copilot/usage.db</code>.</strong>
+  Inspection confirmed it indexes VS Code chatSessions
+  (<code>workspaceStorage/&hellip;/chatSessions/*.jsonl</code>) &mdash; the same
+  source <code>scanner.ts</code> already walks. 0/14 overlap with CLI
+  sessions in the sampled vault. Reading it would cause double-counting.</li>
+  <li><strong>We do NOT read <code>~/.copilot/session-store.db</code>.</strong>
+  It's lazily populated by <code>/chronicle reindex</code>, mostly empty in
+  normal use, and carries no AIC field that isn't already in
+  <code>events.jsonl</code>.</li>
+  <li><strong>We do NOT extend <code>AICCalculator</code> with a
+  prompt&times;multiplier code path.</strong> The existing
+  <code>actualCredits</code> override is already the right primitive &mdash;
+  same model OMP/Pi use. Adding a parallel path would create two ways to
+  do the same thing.</li>
+</ul>
+
+<h2>Tradeoffs &amp; alternatives considered</h2>
+
+<ul>
+  <li><strong>Ledger-only.</strong> Cleaner code, but rejected: the
+  diagnostic proved we'd silently lose half the activity.</li>
+  <li><strong>Live-only.</strong> Simpler too, but rejected: when GitHub
+  actually publishes a precise per-session cost, we should honour it
+  instead of substituting our estimate.</li>
+  <li><strong>Treat <code>selectedModel</code> as truth and only show
+  drift to the user.</strong> Rejected after seeing the haiku-selected /
+  sonnet-billed sessions in real data &mdash; that would over-bill the
+  cheaper model and under-bill the more expensive one. Always attribute
+  to the model that actually answered.</li>
+  <li><strong>Add a fifth source column "BYOK".</strong> Out of scope &mdash;
+  the existing non-billable models panel already surfaces local Ollama /
+  BYOK runs separately from the billed total.</li>
+</ul>
+
+<h2>Open questions</h2>
+
+<ul>
+  <li><strong>Roaming <code>events.jsonl</code> rotation.</strong> CLI does
+  not appear to rotate / compact session files. If the file grows
+  multi-MB, the line-by-line re-parse on mtime change will be slow.
+  Current mitigation: 16-way concurrent reads + per-file mtime cache.
+  If we see real-world performance issues, we'd add a tail-only parser
+  that remembers byte offset.</li>
+  <li><strong>Resume-after-shutdown semantics.</strong> If a session emits
+  a <code>session.shutdown</code> then a <code>session.resume</code> and
+  more prompts, we accumulate the second shutdown's cost on top of the
+  first (per-model addition). The diagnostic shows this is the intended
+  CLI behaviour, but if GitHub changes how cost is reported on the
+  second shutdown (delta vs cumulative) we'd need to revisit.</li>
+  <li><strong>Silent-reroute over-count.</strong> When a session has BOTH
+  a live haiku prompt and a sonnet ledger entry (observed in 2/8 audited
+  sessions &mdash; GitHub silently rerouted the model), the per-model
+  hybrid total keeps the haiku live estimate (0.33 AIC) <em>and</em> the
+  sonnet ledger (e.g. 2.0 AIC), so we report 2.33 when GitHub only billed
+  2.0. Decided to keep the over-count visible rather than silently
+  absorb the haiku prompt &mdash; the <code>driftAic</code> field surfaces
+  the delta and lets users investigate. Alternative considered: drop
+  live-only models when <code>hasLedger</code> is true. Rejected because
+  it would hide the routing decision entirely.</li>
+</ul>
+
+<h2>Audit pass (post-implementation)</h2>
+
+<p>The implementation was audited against the real
+<code>C:\Users\Jagtprit\.copilot\</code> vault and a synthetic test
+fixture. Audit suite at <code>tests/verify-cli-scanner.js</code> &mdash;
+67 assertions across 4 parts. <strong>The audit found 2 real bugs the
+initial implementation review missed</strong>, both now fixed:</p>
+
+<ul>
+  <li><strong>Bug 1 &mdash; slash-command filter dropped filesystem paths.</strong>
+  The regex <code>^\/[A-Za-z][\w-]*\b</code> matched
+  <code>/usr/local/bin/node</code> because <code>\b</code> fires
+  between <code>r</code> and <code>/</code>. User prompts that started
+  with a Unix path were silently excluded from billable counts. Fixed
+  to <code>^\/[A-Za-z][\w-]*(?:\s|$)</code> &mdash; require whitespace or
+  end-of-string after the first token.</li>
+  <li><strong>Bug 2 &mdash; <code>session.model_change</code> had no effect on
+  attribution.</strong> The handler only updated
+  <code>uiSelectedModel</code>, which is the <em>fallback</em> source.
+  Because <code>lastAssistantModel</code> (set by the prior
+  <code>assistant.message</code>) still won, an explicit user model
+  switch did not take effect until the next assistant response landed
+  &mdash; silently mis-attributing the very next prompt. Fixed to update
+  both signals so model_change becomes the immediate ground truth.</li>
+  <li><strong>Latent bug 3 &mdash; double-count of paired session formats.</strong>
+  9 of 14 active session IDs in the real vault existed in BOTH
+  <code>&lt;id&gt;.jsonl</code> (legacy flat) AND
+  <code>&lt;id&gt;/events.jsonl</code> (new format). The original
+  <code>enumerateSessionFiles</code> would have visited both. Never
+  reached production because all paired sessions happened to have empty
+  new-format files, but would have triggered the next time the CLI
+  emitted to both. Fixed: mtime-based de-dup with
+  <code>Map&lt;sessionId, Candidate&gt;</code> + zero-byte skip.</li>
+</ul>
+
+<p>Final audit result: <strong>67/67 assertions pass</strong>. Real-vault
+coverage: 23 sessions parsed, 51 billable prompts, 60.99 AIC, 51,103
+output tokens, 8 ledger-reconciled / 15 live-only. The scanner's
+all-time aggregates match an independent re-walk byte-for-byte (Part
+C.12), and per-session results agree with
+<code>tests/diagnose-copilot-cli.mjs</code>.</p>
+
+<h2>Files touched</h2>
+
+<ul>
+  <li><code>src/cliScanner.ts</code> &mdash; <strong>new</strong>, ~470 lines.
+  Parses events.jsonl (new + legacy formats), produces
+  <code>CliScanResult</code> with per-model live + ledger stats and
+  drift indicator.</li>
+  <li><code>src/dashboardData.ts</code> &mdash; extended
+  <code>AgentUsageSummary</code> with <code>cli*</code> fields,
+  added <code>cliScan?: CliScanResult</code> param to
+  <code>buildDashboardData</code>, pushes CLI per-model credit entries
+  with <code>actualCredits</code> direct.</li>
+  <li><code>src/extension.ts</code> &mdash; imports
+  <code>scanCliSessions</code>, runs it in the existing
+  <code>Promise.all</code> alongside <code>scanWorkspaceStorage</code>
+  and <code>scanAgentSessions</code>; reads the two new settings.</li>
+  <li><code>src/dashboardPanel.ts</code> &mdash; per-source breakdown is
+  now 5 columns (VS Code / OMP / Pi / Copilot CLI / Total); new red
+  CLI badge; diagnostic note shows ledger-vs-live drift when present.</li>
+  <li><code>package.json</code> &mdash; new
+  <code>copilotUsage.cli.enabled</code> (boolean, default
+  <code>true</code>) and <code>copilotUsage.cli.homePath</code>
+  (string, default empty &rarr; <code>$COPILOT_HOME</code> &rarr;
+  <code>~/.copilot</code>).</li>
+  <li><code>tests/diagnose-copilot-cli.mjs</code> &mdash; <strong>kept</strong>
+  as a permanent diagnostic. Runs standalone (no TS), validates the
+  algorithm against any user's real <code>~/.copilot/</code>, prints
+  drift and per-session strategy choice.</li>
+  <li><code>tests/verify-cli-scanner.js</code> &mdash; <strong>new</strong>,
+  ~330 lines, 67 assertions. PART A: parser unit tests with synthetic
+  events (slash filter, multiplier table, attribution &amp; hybrid,
+  live-only fallback, edge cases). PART B: tmpdir-based de-dup
+  regression covering all 5 file-pairing scenarios. PART C: integration
+  against the real <code>~/.copilot</code> &mdash; verifies scanner
+  internals match an independent re-walk byte-for-byte, including 23
+  parsed sessions / 51 prompts / 8 ledger-reconciled / 15 live-only.
+  PART D: cross-check against the independent
+  <code>diagnose-copilot-cli.mjs</code> algorithm.</li>
+</ul>
+
 </body>
 </html>

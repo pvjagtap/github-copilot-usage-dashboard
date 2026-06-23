@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [1.10.13] - 2026-06-23
+
+### Added
+
+- **GitHub Copilot CLI (`@github/copilot`) usage tracking** — new `cliScanner.ts` walks every session under `${COPILOT_HOME ?? ~/.copilot}/session-state/` (both new `<uuid>/events.jsonl` and legacy flat `<uuid>.jsonl` formats) and contributes to the shared AIC budget. Uses a hybrid live-walk + ledger strategy because **neither signal alone is sufficient**:
+  - **Live walk** — counts `user.message` events attributed to the current model (`assistant.message.data.model` is treated as the source of truth, not `selectedModel`, because the diagnostic in `tests/diagnose-copilot-cli.mjs` found two sessions where the user selected `claude-haiku-4-5` but `session.shutdown` showed `claude-sonnet-4.6` was actually billed). Slash commands (`/usage`, `/chronicle`, …) are filtered via a strict regex that rejects filesystem paths.
+  - **Ledger fallback** — when the session emitted `session.shutdown`, the per-model `requests.cost` field is treated as authoritative and overrides the live estimate. Drift between the two signals is surfaced in the dashboard for diagnostics.
+  - **Why both** — empirically, **4 of 8** sampled sessions had no `session.shutdown` event (crash, Ctrl-C, still-open) — a ledger-only implementation would silently lose ~50% of CLI activity. Live-only would miss `~5%` precision on clean sessions because it uses prompt-counts × multiplier rather than the CLI's actual billed cost.
+- **CLI column in Usage by Source** (`dashboardPanel.renderAgentSessions`) — the per-source breakdown is now 5 columns (VS Code / Oh My Pi / Pi / Copilot CLI / Total) with reconciliation diagnostics shown below the table when CLI data is present (`N ledger-reconciled · M live-only · drift ±X.XX AIC`). `vscodeAicCredits` is now `summary.totalCredits − ompCredits − piCredits − cliCredits` so the columns always sum to the billing total.
+- **Settings** — `copilotUsage.cli.enabled` (default `true`, kill switch) and `copilotUsage.cli.homePath` (override resolution; falls back to `$COPILOT_HOME` then `~/.copilot`).
+- **Audit test suite** — `tests/verify-cli-scanner.js` (67 assertions, 4 parts: parser unit tests with synthetic events, de-dup regression against a tmpdir fixture, integration against the real `~/.copilot`, and cross-check against the independent `diagnose-copilot-cli.mjs` walk). Run via `C:\nodejs\node.exe tests\verify-cli-scanner.js`. The audit exercises 23 real sessions / 51 prompts / 8 ledger-reconciled / 15 live-only and verifies the scanner's all-time aggregates byte-for-byte against an independent re-walk.
+
+### Fixed
+
+- **Slash-command filter no longer drops filesystem paths** — `isSlashCommand` was `^\/[A-Za-z][\w-]*\b`, which matched `/usr/local/bin/node` because `\b` fires between `r` and `/`, causing user prompts that started with a path to be incorrectly skipped from billable counts. Now requires whitespace or end-of-string after the first token: `^\/[A-Za-z][\w-]*(?:\s|$)`. Found by `tests/verify-cli-scanner.js` A.1.
+- **`session.model_change` now actually re-attributes the next prompt** — previously only updated `uiSelectedModel`, which is the *fallback* in the attribution chain. Because `lastAssistantModel` (set by the prior `assistant.message`) still won, an explicit user model switch had no effect until the *next* assistant response landed. Now `session.model_change` updates both signals so the very next `user.message` attributes to the new model — matching the user's intent. Found by `tests/verify-cli-scanner.js` A.3.
+- **De-duplication of paired session formats** — `enumerateSessionFiles` now does mtime-based de-dup with a `Map<sessionId, Candidate>` and skips zero-byte legacy `.jsonl` siblings (real-world: 9 of 14 active session IDs in the audited vault existed in both forms). Latent double-count bug found during the audit pass; never reached production because all paired sessions had empty new-format files, but would have triggered the next time the CLI emitted to both.
+
+### Notes
+
+- The CLI scanner deliberately does **not** read `~/.copilot/usage.db` (it indexes VS Code chatSessions — the same source `scanner.ts` already reads, would cause double-counting) or `~/.copilot/session-store.db` (lazily populated by `/chronicle reindex`, carries no AIC field not already in `events.jsonl`).
+- CLI credits flow through `creditEntries[].actualCredits` directly — bypassing the token-rate calculator — because GitHub Copilot CLI bills per *prompt × multiplier*, not per token. The same path OMP/Pi take when they already have a known credit value.
+- **Hybrid totalAic semantics**: per-model, ledger wins where present, live fills the gap. A model that has live prompts but is NOT in the shutdown ledger (e.g. user picked haiku, GitHub silently re-routed to sonnet for billing) keeps its live estimate in the total — this *may slightly over-count* in silent-reroute scenarios. The `driftAic` field surfaces the delta so users can see when this happens; the choice favors visibility over silent absorption.
+
 ## [1.10.12] - 2026-06-23
 
 ### Added

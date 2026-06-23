@@ -564,8 +564,8 @@ function render() {
   const aicBudget = DATA.aicSummary ? DATA.aicSummary.monthlyBudget : 0;
   const ag = DATA.agentSummary;
   const aicSub = aicBudget > 0 ? aicTotal+'/'+aicBudget+' credits' : 'no budget set';
-  const aicSrcSub = (ag && (ag.ompSessions > 0 || ag.piSessions > 0))
-    ? 'VS Code+OMP+Pi (all sources)'
+  const aicSrcSub = (ag && (ag.ompSessions > 0 || ag.piSessions > 0 || ag.cliSessions > 0))
+    ? 'VS Code+OMP+Pi+CLI (all sources)'
     : aicSub;
 
   // === HERO KPIs (4 headline cards with deltas & accent stripes) ===
@@ -907,17 +907,41 @@ function renderAgentSessions(agent) {
 
   // fmt helpers — inline since they're one-off and used only here
   const fmtAIC = v => (+v).toFixed(2);
-  const hasAgentData = agent.ompSessions > 0 || agent.piSessions > 0;
+  const hasAgentData = agent.ompSessions > 0 || agent.piSessions > 0 || agent.cliSessions > 0;
   const agentNote = hasAgentData
     ? ''
-    : '<div style="margin-top:6px;font-size:11px;color:var(--muted)">No OMP or Pi agent sessions found for this billing period. ' +
-      'Sessions will appear once Oh My Pi or Pi coding-agent activity is detected in ' +
-      '<code>~/.omp/agent/sessions</code> or <code>~/.pi/agent/sessions</code>.</div>';
+    : '<div style="margin-top:6px;font-size:11px;color:var(--muted)">No OMP, Pi, or GitHub Copilot CLI sessions found for this billing period. ' +
+      'Sessions will appear once activity is detected in ' +
+      '<code>~/.omp/agent/sessions</code>, <code>~/.pi/agent/sessions</code>, or ' +
+      '<code>~/.copilot/session-state</code>.</div>';
 
-  // Total row values
+  // CLI drift / fallback diagnostic — shown only when CLI data exists.
+  // The CLI hybrid scanner reports liveAic vs ledgerAic for sessions with
+  // both signals (see src/cliScanner.ts). A non-zero drift is normal and
+  // typically small (±5% on clean sessions per the diagnostic in
+  // tests/diagnose-copilot-cli.mjs). Live-only sessions are sessions that
+  // never emitted a session.shutdown event (crash, Ctrl-C, still-open).
+  const cliDiagBits = [];
+  if (agent.cliReconciledSessions > 0) {
+    cliDiagBits.push(agent.cliReconciledSessions + ' ledger-reconciled');
+  }
+  if (agent.cliLiveOnlySessions > 0) {
+    cliDiagBits.push(agent.cliLiveOnlySessions + ' live-only');
+  }
+  if (Math.abs(agent.cliDriftAic || 0) >= 0.01) {
+    const sign = agent.cliDriftAic > 0 ? '+' : '';
+    cliDiagBits.push('drift ' + sign + agent.cliDriftAic.toFixed(2) + ' AIC');
+  }
+  const cliDiagNote = (agent.cliSessions > 0 && cliDiagBits.length > 0)
+    ? '<div style="margin-top:6px;font-size:11px;color:var(--muted)">CLI: ' + cliDiagBits.join(' · ') +
+      ' · home <code>' + esc(agent.cliCopilotHome || '~/.copilot') + '</code></div>'
+    : '';
+
+  // Total row values — CLI prompts count as LLM calls, CLI live output
+  // tokens count toward the token volume so the Total column reconciles.
   const totalSess  = agent.totalSessions;
-  const totalCalls = (agent.vscodeTurns||0) + (agent.ompLlmCalls||0) + (agent.piLlmCalls||0);
-  const totalTok   = (agent.vscodeTotalTokens||0) + (agent.ompAllTimeTokens||0) + (agent.piAllTimeTokens||0);
+  const totalCalls = (agent.vscodeTurns||0) + (agent.ompLlmCalls||0) + (agent.piLlmCalls||0) + (agent.cliLlmCalls||0);
+  const totalTok   = (agent.vscodeTotalTokens||0) + (agent.ompAllTimeTokens||0) + (agent.piAllTimeTokens||0) + (agent.cliAllTimeTokens||0);
   const totalAIC   = fmtAIC(agent.totalCredits||0);
 
   const fmtTok = v => {
@@ -938,20 +962,23 @@ function renderAgentSessions(agent) {
       '<td class="num">'+agent.vscodeSessions+'</td>' +
       '<td class="num">'+(agent.ompSessions||0)+'</td>' +
       '<td class="num">'+(agent.piSessions||0)+'</td>' +
+      '<td class="num">'+(agent.cliSessions||0)+'</td>' +
       '<td class="num orange"><strong>'+totalSess+'</strong></td>' +
     '</tr>' +
     '<tr>' +
-      '<td>Turns / LLM Calls</td>' +
+      '<td>Turns / LLM Calls / Prompts</td>' +
       '<td class="num">'+(agent.vscodeTurns||0).toLocaleString()+'</td>' +
       '<td class="num">'+(agent.ompLlmCalls||0).toLocaleString()+'</td>' +
       '<td class="num">'+(agent.piLlmCalls||0).toLocaleString()+'</td>' +
+      '<td class="num" title="User prompts in the billing window (slash commands excluded)">'+(agent.cliLlmCalls||0).toLocaleString()+'</td>' +
       '<td class="num orange"><strong>'+totalCalls.toLocaleString()+'</strong></td>' +
     '</tr>' +
     '<tr>' +
-      '<td>Tokens — prompt + output <span style="font-size:10px;color:var(--muted)">(VS Code: workspace storage · OMP/Pi: all time)</span></td>' +
+      '<td>Tokens — prompt + output <span style="font-size:10px;color:var(--muted)">(VS Code: workspace storage · OMP/Pi/CLI: all time)</span></td>' +
       '<td class="num" title="All turns retained in VS Code workspace storage">'+fmtTok(agent.vscodeTotalTokens||0)+'</td>' +
       '<td class="num" title="All-time historical OMP agent tokens">'+fmtTok(agent.ompAllTimeTokens||0)+'</td>' +
       '<td class="num" title="All-time historical Pi agent tokens">'+fmtTok(agent.piAllTimeTokens||0)+'</td>' +
+      '<td class="num" title="All-time CLI live output tokens (from assistant.message events)">'+fmtTok(agent.cliAllTimeTokens||0)+'</td>' +
       '<td class="num orange" title="Sum across differing retention windows — see column headers"><strong>'+fmtTok(totalTok)+'</strong></td>' +
     '</tr>' +
     '<tr style="border-top:1px solid var(--border)">' +
@@ -959,6 +986,7 @@ function renderAgentSessions(agent) {
       '<td class="num orange">'+fmtAIC(agent.vscodeAicCredits||0)+'</td>' +
       '<td class="num orange">'+fmtAIC(agent.ompTotalCredits||0)+'</td>' +
       '<td class="num orange">'+fmtAIC(agent.piTotalCredits||0)+'</td>' +
+      '<td class="num orange" title="Ledger when present (session.shutdown.cost), else prompts × multiplier">'+fmtAIC(agent.cliTotalCredits||0)+'</td>' +
       '<td class="num orange"><strong>'+totalAIC+'</strong></td>' +
     '</tr>';
 
@@ -967,6 +995,7 @@ function renderAgentSessions(agent) {
     +   ' ' + srcBadge('VS Code','#0078d4')
     +   ' ' + srcBadge('OMP','#7c3aed')
     +   ' ' + srcBadge('Pi','#059669')
+    +   ' ' + srcBadge('CLI','#dc2626')
     + '</div>'
     + '<div class="section-subtitle">Per-source breakdown — all AIC credits feed into the shared billing budget above</div>'
     + '</div>'
@@ -975,11 +1004,13 @@ function renderAgentSessions(agent) {
     +   '<th class="num">VS Code</th>'
     +   '<th class="num">Oh My Pi</th>'
     +   '<th class="num">Pi</th>'
+    +   '<th class="num">Copilot CLI</th>'
     +   '<th class="num">Total</th>'
     + '</tr></thead><tbody>'
     + tbody
     + '</tbody></table>'
     + agentNote
+    + cliDiagNote
     + '</div>';
 }
 

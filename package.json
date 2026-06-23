@@ -2,7 +2,7 @@
   "name": "copilot-usage-dashboard",
   "displayName": "Copilot Usage Dashboard",
   "description": "Live token usage dashboard for GitHub Copilot — prompt, output, and cached tokens with full analytics.",
-  "version": "1.10.12",
+  "version": "1.10.13",
   "publisher": "pvjagtap",
   "icon": "images/icon.png",
   "license": "MIT",
@@ -127,6 +127,16 @@
             "type": "string",
             "default": "",
             "description": "Optional absolute path to a VS Code workspaceStorage directory. When empty, the extension auto-detects across Linux (~/.config/Code), macOS (~/Library/Application Support/Code), Windows (%APPDATA%/Code), dev containers / Remote-SSH / WSL (~/.vscode-server), and VS Code Insiders. Set this if you run a portable install, a fork, or need to point at a specific install."
+          },
+          "copilotUsage.cli.enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Include GitHub Copilot CLI (@github/copilot) session usage in the dashboard. When on, the extension scans ~/.copilot/session-state/ (overridable below) for live prompt activity and session.shutdown billing ledgers. Disable to exclude CLI usage entirely."
+          },
+          "copilotUsage.cli.homePath": {
+            "type": "string",
+            "default": "",
+            "description": "Optional absolute path to the GitHub Copilot CLI home directory (where session-state/ lives). When empty, resolves to the COPILOT_HOME env var, then falls back to ~/.copilot. Set this if you run the CLI from a portable install or a non-standard location."
           }
         }
       },

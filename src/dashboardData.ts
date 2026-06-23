@@ -5,6 +5,7 @@
 
 import { ScanResult, Session, Turn, ToolCall, Subagent, ScanStats, DebugRequest } from "./scanner";
 import { AgentScanResult } from "./agentScanner";
+import { CliScanResult } from "./cliScanner";
 import { LiveStats, OTelRequest } from "./otelReceiver";
 import { AICCalculator, AICConfig, DEFAULT_AIC_CONFIG, createCalculatorFromConfig, getPromoInfo, classifyModelBillability } from "./aicCredits";
 import { classifyByCatalog } from "./modelCatalog";
@@ -249,6 +250,30 @@ export interface AgentUsageSummary {
   /** All-time (no billing filter) — historical token volume */
   piAllTimeLlmCalls: number;
   piAllTimeTokens: number;
+
+  // ── GitHub Copilot CLI (~/.copilot/session-state) ──────────
+  // Live-walked prompts × multiplier; overridden by session.shutdown
+  // ledger (cost field) whenever a clean shutdown was emitted. See
+  // [src/cliScanner.ts](./cliScanner.ts) for the hybrid strategy and
+  // empirical drift bounds.
+  cliSessions: number;
+  /** Σ user.message events (slash-commands excluded) in the billing window. */
+  cliLlmCalls: number;
+  /** Σ live output tokens reported on assistant.message events. */
+  cliTotalTokens: number;
+  /** AIC: ledger when present, else prompts × multiplier. */
+  cliTotalCredits: number;
+  cliAllTimeSessions: number;
+  cliAllTimeLlmCalls: number;
+  cliAllTimeTokens: number;
+  /** Σ liveAic − Σ ledgerAic over sessions that have both. Pure diagnostic. */
+  cliDriftAic: number;
+  /** Sessions in the window that had a session.shutdown event (ledger basis). */
+  cliReconciledSessions: number;
+  /** Sessions in the window that had no shutdown (live-only fallback). */
+  cliLiveOnlySessions: number;
+  /** Resolved Copilot home dir used for the scan (for diagnostics / settings UI). */
+  cliCopilotHome: string;
 
   // ── Cumulative (all sources) ────────────────────────────────
   totalSessions: number;
@@ -524,7 +549,7 @@ function computeAllModels(turns: Turn[]): string[] {
 // authoritative debug-log `copilotUsageNanoAiu`, while not-yet-flushed live
 // OTel calls are added as temporary estimates.
 
-export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null, aicConfig?: AICConfig, agentScan?: AgentScanResult, activationTime?: string): DashboardData {
+export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null, aicConfig?: AICConfig, agentScan?: AgentScanResult, activationTime?: string, cliScan?: CliScanResult): DashboardData {
   // Create AIC calculator early so it can be used in session views
   const config = aicConfig ?? DEFAULT_AIC_CONFIG;
   const calculator = createCalculatorFromConfig(config);
@@ -1195,6 +1220,48 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
     }
   }
 
+  // ─── CLI Session Credit Entries (~/.copilot) ──────────────────
+  //
+  // GitHub Copilot CLI bills per *prompt* with a model multiplier — NOT
+  // per token. session.shutdown.data.modelMetrics.{m}.requests.cost is
+  // the authoritative AIC value (multiplier already applied by the CLI).
+  // For sessions without a clean shutdown we fall back to the live walk
+  // value (prompts × multiplier) computed in [cliScanner.ts](./cliScanner.ts).
+  //
+  // We push `actualCredits` directly so it bypasses the token-rate
+  // calculator — the same path OMP/Pi take when they have a known credit
+  // value. The token fields are left at 0 to avoid double-counting in
+  // input/output credit subtotals.
+  let cliCredits = 0;
+  let cliTokens = 0;
+  let cliCalls = 0;
+  if (cliScan) {
+    for (const session of cliScan.sessions) {
+      const date = new Date(session.lastTs || session.firstTs).toISOString().slice(0, 10);
+      if (date < AIC_EFFECTIVE_DATE) { continue; }
+      cliCalls += session.totalLivePrompts;
+      for (const [model, stats] of Object.entries(session.byModel)) {
+        cliTokens += stats.liveOutputTokens;
+        // Per-model AIC: ledger wins (authoritative), live fallback otherwise.
+        const aic = stats.ledgerAic !== undefined ? stats.ledgerAic : stats.liveAic;
+        if (aic <= 0) { continue; }
+        const billable = classify(model, false);
+        creditEntries.push({
+          model,
+          inputTokens: 0,
+          outputTokens: 0,
+          cachedTokens: 0,
+          date,
+          actualCredits: aic,
+          billable,
+        });
+        if (billable) {
+          cliCredits += aic;
+        }
+      }
+    }
+  }
+
   const summary = calculator.computeSummary(creditEntries);
 
   // Promo detection: auto-detect if we're in the June 1 – Sept 1, 2026 window
@@ -1274,7 +1341,9 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
     vscodeSessions:    scan.sessions.length,
     vscodeTurns:       scan.turns.length,
     vscodeTotalTokens: vscodeTurnTokens,
-    vscodeAicCredits:  Math.round((summary.totalCredits - ompCredits - piCredits) * 100) / 100,
+    // Residual AIC after subtracting every non-VSCode source so the four
+    // columns in the dashboard reconcile to summary.totalCredits exactly.
+    vscodeAicCredits:  Math.round((summary.totalCredits - ompCredits - piCredits - cliCredits) * 100) / 100,
 
     ompSessions:    agentScan?.ompSessionCount ?? 0,
     ompLlmCalls:    ompCalls,
@@ -1290,9 +1359,25 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
     piAllTimeLlmCalls: agentScan?.piAllTimeLlmCalls  ?? 0,
     piAllTimeTokens:   agentScan?.piAllTimeTokens    ?? 0,
 
-    totalSessions: scan.sessions.length + (agentScan?.ompSessionCount ?? 0) + (agentScan?.piSessionCount ?? 0),
+    cliSessions:        cliScan?.sessions.length ?? 0,
+    cliLlmCalls:        cliCalls,
+    cliTotalTokens:     cliTokens,
+    cliTotalCredits:    Math.round(cliCredits * 100) / 100,
+    cliAllTimeSessions: cliScan?.allTimeSessions ?? 0,
+    cliAllTimeLlmCalls: cliScan?.allTimeLivePrompts ?? 0,
+    cliAllTimeTokens:   cliScan?.allTimeOutputTokens ?? 0,
+    cliDriftAic:        cliScan?.driftAic ?? 0,
+    cliReconciledSessions: cliScan?.reconciledSessions ?? 0,
+    cliLiveOnlySessions:   cliScan?.liveOnlySessions ?? 0,
+    cliCopilotHome:        cliScan?.copilotHome ?? "",
+
+    totalSessions:
+      scan.sessions.length
+      + (agentScan?.ompSessionCount ?? 0)
+      + (agentScan?.piSessionCount ?? 0)
+      + (cliScan?.sessions.length ?? 0),
     totalCredits:  Math.round(summary.totalCredits * 100) / 100,
-    scanMs:        agentScan?.scanMs ?? 0,
+    scanMs:        (agentScan?.scanMs ?? 0) + (cliScan?.scanMs ?? 0),
   };
 
   // Determine current session AIC (most recent session with activity)

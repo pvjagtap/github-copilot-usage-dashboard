@@ -5,6 +5,7 @@ import { StatusBarProvider, CurrentSessionInfo } from "./statusBar";
 import { DashboardPanel } from "./dashboardPanel";
 import { scanWorkspaceStorage, ScanResult, getWorkspaceStoragePath } from "./scanner";
 import { scanAgentSessions, AgentScanResult } from "./agentScanner";
+import { scanCliSessions, CliScanResult } from "./cliScanner";
 import { buildDashboardData, DashboardData, AIC_EFFECTIVE_DATE } from "./dashboardData";
 import { SidebarViewProvider } from "./sidebarView";
 import { buildSidebarSnapshot } from "./sidebarSnapshot";
@@ -42,6 +43,7 @@ let lastCurrentSession: CurrentSessionInfo | null = null;
 let scanTimer: ReturnType<typeof setInterval> | undefined;
 let lastScan: ScanResult | undefined;
 let lastAgentScan: AgentScanResult | undefined;
+let lastCliScan: CliScanResult | undefined;
 let output: vscode.OutputChannel;
 /**
  * fs.watch on workspaceStorage to catch `main.jsonl` writes in real time.
@@ -122,7 +124,7 @@ function buildData(): DashboardData {
     },
   };
   const aicConfig = getAICConfig();
-  cachedDashData = buildDashboardData(scan, otelStats, aicConfig, lastAgentScan, activationTime);
+  cachedDashData = buildDashboardData(scan, otelStats, aicConfig, lastAgentScan, activationTime, lastCliScan);
   const elapsed = Date.now() - t0;
   if (elapsed > 200) {
     output.appendLine(
@@ -135,19 +137,26 @@ function buildData(): DashboardData {
 async function runScan(): Promise<void> {
   try {
     const t0 = Date.now();
-    const wsOverride = vscode.workspace
-      .getConfiguration("copilotUsage")
-      .get<string>("workspaceStoragePath", "")
-      .trim();
-    const [scanResult, agentResult] = await Promise.all([
+    const cfg = vscode.workspace.getConfiguration("copilotUsage");
+    const wsOverride = cfg.get<string>("workspaceStoragePath", "").trim();
+    const cliEnabled = cfg.get<boolean>("cli.enabled", true);
+    const cliHomeOverride = cfg.get<string>("cli.homePath", "").trim();
+    const [scanResult, agentResult, cliResult] = await Promise.all([
       scanWorkspaceStorage(wsOverride || undefined),
       scanAgentSessions().catch((err: unknown) => {
         output.appendLine(`Agent scan error: ${err}`);
         return undefined as AgentScanResult | undefined;
       }),
+      cliEnabled
+        ? scanCliSessions(cliHomeOverride || undefined).catch((err: unknown) => {
+            output.appendLine(`CLI scan error: ${err}`);
+            return undefined as CliScanResult | undefined;
+          })
+        : Promise.resolve(undefined as CliScanResult | undefined),
     ]);
     lastScan = scanResult;
     lastAgentScan = agentResult;
+    lastCliScan = cliResult;
     cachedDashData = undefined; // Invalidate cache
     const elapsed = Date.now() - t0;
     output.appendLine(
@@ -155,7 +164,13 @@ async function runScan(): Promise<void> {
         `${lastScan.stats.toolCallsStored} tools (${elapsed}ms)` +
         (lastAgentScan
           ? ` | Agent: OMP=${lastAgentScan.ompSessionCount} Pi=${lastAgentScan.piSessionCount} (${lastAgentScan.scanMs}ms)`
-          : " | Agent: scan failed")
+          : " | Agent: scan failed") +
+        (lastCliScan
+          ? ` | CLI: ${lastCliScan.sessions.length}/${lastCliScan.allTimeSessions} sessions, ` +
+            `${lastCliScan.totalLivePrompts} prompts, ${lastCliScan.totalAic} AIC ` +
+            `(${lastCliScan.reconciledSessions} ledger / ${lastCliScan.liveOnlySessions} live-only, ` +
+            `drift ${lastCliScan.driftAic > 0 ? "+" : ""}${lastCliScan.driftAic}, ${lastCliScan.scanMs}ms)`
+          : cliEnabled ? " | CLI: scan failed" : "")
     );
   } catch (err) {
     output.appendLine(`Scan error: ${err}`);
