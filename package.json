@@ -2,7 +2,7 @@
   "name": "copilot-usage-dashboard",
   "displayName": "Copilot Usage Dashboard",
   "description": "Live token usage dashboard for GitHub Copilot — prompt, output, and cached tokens with full analytics.",
-  "version": "1.10.11",
+  "version": "1.10.12",
   "publisher": "pvjagtap",
   "icon": "images/icon.png",
   "license": "MIT",
@@ -226,6 +226,28 @@
                 "tier"
               ]
             }
+          },
+          "copilotUsage.aic.includeOnlyBilledModels": {
+            "type": "boolean",
+            "default": true,
+            "description": "When true (default), only models that GitHub Copilot actually bills in AI Credits (Claude/GPT/Gemini families in the rate table) count toward the headline total, budget bar, and projected spend. Local Ollama, LM Studio, BYOK keys, and unrecognised models are still tracked and shown in a separate 'Non-billable models (informational)' panel for capacity planning, but excluded from billed-cost math. Disable to restore the legacy behaviour where every chat call inflates AIC totals. (Issue #5)"
+          },
+          "copilotUsage.aic.excludeModels": {
+            "type": "array",
+            "default": [],
+            "description": "Model name substrings to force-EXCLUDE from billable totals, even if they otherwise match the GHC rate table. Use this to mark a specific alias (e.g. 'raptor-mini-internal') as informational. Matching is case-insensitive substring. (Issue #5)",
+            "items": { "type": "string" }
+          },
+          "copilotUsage.aic.extraBilledModels": {
+            "type": "array",
+            "default": [],
+            "description": "Model name substrings to force-INCLUDE as billable even when they don't appear in the built-in rate table. Escape hatch for preview models that arrive before the table is updated. Matching is case-insensitive substring. (Issue #5)",
+            "items": { "type": "string" }
+          },
+          "copilotUsage.aic.useOnlineModelCatalog": {
+            "type": "boolean",
+            "default": true,
+            "description": "When true (default), fetch the authoritative GitHub Copilot model catalog once per 24h (CDN known-models manifest + Copilot CAPI /models) and use it as the primary billable-vs-non-billable classifier. The CDN manifest is the same URL the official Copilot Chat extension reads on startup, and the CAPI response includes the canonical billing.multiplier field. Lets the dashboard recognise new preview models (e.g. Claude Fable 5) without an extension update, and correctly excludes BYOK model IDs that happen to substring-match a known family. Disable to operate fully offline using only the built-in rate table. (Issue #5)"
           }
         }
       },

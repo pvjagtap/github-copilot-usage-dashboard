@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Issue #5 — Implementation Notes</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.55 -apple-system, "Segoe UI", system-ui, sans-serif; max-width: 980px; margin: 24px auto; padding: 0 16px; }
+  h1 { border-bottom: 2px solid #888; padding-bottom: 6px; }
+  h2 { margin-top: 28px; border-bottom: 1px solid #ccc; padding-bottom: 4px; }
+  h3 { margin-top: 20px; }
+  code, pre { font-family: ui-monospace, "Cascadia Mono", Menlo, monospace; }
+  pre { background: rgba(127,127,127,.12); padding: 10px; border-radius: 6px; overflow-x: auto; }
+  .ok { color: #2c8a2c; }
+  .bad { color: #b00020; }
+  .warn { color: #b8860b; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0 16px; }
+  th, td { border: 1px solid #888; padding: 6px 8px; text-align: left; vertical-align: top; }
+  th { background: rgba(127,127,127,.12); }
+  blockquote { border-left: 3px solid #888; margin: 8px 0; padding: 4px 12px; background: rgba(127,127,127,.08); }
+</style>
+</head>
+<body>
+<h1>Issue #5 — Usage statistics don't match actual numbers from GitHub</h1>
+
+<p><strong>Report:</strong>
+<a href="https://github.com/pvjagtap/github-copilot-usage-dashboard/issues/5">github.com/pvjagtap/.../issues/5</a></p>
+
+<blockquote>
+User sees <strong>7,347.7 credits</strong> in the extension vs <strong>5,278.2 credits</strong> reported by GitHub.
+Subtracting the user's Ollama line (1,662.33 credits) leaves <strong>5,685.4</strong> — close but still ~407 over.
+</blockquote>
+
+<h2>1. Root-cause analysis</h2>
+
+<h3>1a. Bug — Non-GitHub models (Ollama, BYOK, local) counted as billable <span class="bad">(primary)</span></h3>
+<p>
+VS Code's chat & agent surfaces emit OpenTelemetry traces for <em>every</em> model invocation regardless of
+backend — including Ollama, LM Studio and any "Bring Your Own Key" provider. Our OTLP receiver
+(<code>src/otelReceiver.ts</code>) ingests them all. In <code>buildDashboardData()</code> any request without
+<code>copilotUsageNanoAiu</code> (which only GitHub's backend emits) falls back to a <em>rate-table estimate</em>
+that defaults to <code>gpt-4.1</code> (200 / 800 credits per 1M tokens) when the model name isn't recognised.
+The result: Ollama traffic shows up as "AIC credits" and inflates the total.
+</p>
+<p>Confirmed by GitHub's billing docs:</p>
+<blockquote>
+"Code completions and next edit suggestions are not billed in AI credits."<br>
+"Copilot features that use AI models consume AI credits" — i.e. only features routed through GitHub's
+billing backend; BYOK/local models are paid for by the user's own provider key.
+</blockquote>
+
+<h3>1b. Bug — totals span from AIC effective date, not the current billing cycle <span class="bad">(secondary)</span></h3>
+<p>
+<code>dashboardData.ts</code> filters <code>aicTurns</code> with
+<code>t.timestamp.slice(0,10) &gt;= AIC_EFFECTIVE_DATE</code> (= <code>"2026-06-01"</code>) and
+<code>computeSummary()</code> sums every entry it receives. For users whose billing cycle
+starts mid-month (e.g. signup-anchored cycles), or once we cross into July, the dashboard
+will keep counting credits beyond the current cycle — so the "monthly budget" reading is wrong.
+</p>
+
+<h3>1c. Gap — Auto-model 10% discount not modelled <span class="warn">(minor)</span></h3>
+<p>
+GitHub's doc: "If you are on a paid Copilot plan, you qualify for a 10% discount on model costs while using
+auto model selection." When <code>copilotUsageNanoAiu</code> is present this is already baked into the billed
+value. Only the rate-table <em>estimate</em> path misses it. Left as a follow-up because the API-billed value
+dominates the realistic case.
+</p>
+
+<h2>2. Solution design</h2>
+
+<h3>2a. "Billable" classifier (the single source of truth)</h3>
+<p>A credit entry is treated as <strong>billable</strong> iff <em>either</em>:</p>
+<ol>
+  <li>It carries an explicit <code>copilotUsageNanoAiu &gt; 0</code> (= GitHub's backend already billed it), <em>or</em></li>
+  <li>Its model name matches an entry in <code>DEFAULT_MODEL_COSTS</code> (a known GitHub-Copilot-supported model),
+      <em>and</em> the model is not in the user-configured <code>excludeModels</code> list.</li>
+</ol>
+<p>Everything else (Ollama, LM Studio, BYOK keys, unknown custom models with no nanoAiu) is
+<strong>non-billable</strong> — surfaced in the dashboard as an "informational" section but
+<strong>excluded</strong> from <code>totalCredits</code>, the budget bar, overage cost,
+projected total, and the daily-limit guard.</p>
+
+<h3>2b. Cycle-window scoping</h3>
+<p><code>AICCalculator.computeSummary()</code> now filters every entry to the current
+billing cycle window (<code>billingCycleStart … billingCycleEnd</code> inclusive). This
+aligns "dashboard total" with "what GitHub will charge you this month".</p>
+
+<h3>2c. New settings</h3>
+<table>
+  <tr><th>Setting</th><th>Default</th><th>Purpose</th></tr>
+  <tr>
+    <td><code>copilotUsage.aic.includeOnlyBilledModels</code></td>
+    <td><code>true</code></td>
+    <td>Master switch. When <code>true</code> (recommended), non-billable models are listed but excluded from totals.</td>
+  </tr>
+  <tr>
+    <td><code>copilotUsage.aic.excludeModels</code></td>
+    <td><code>[]</code></td>
+    <td>Explicit user-supplied substrings to force-exclude (e.g. <code>["my-internal-llm"]</code>).</td>
+  </tr>
+  <tr>
+    <td><code>copilotUsage.aic.extraBilledModels</code></td>
+    <td><code>[]</code></td>
+    <td>Model substrings to treat as billable even without a rate match (escape hatch for previews).</td>
+  </tr>
+</table>
+
+<h2>3. Deviations &amp; trade-offs</h2>
+<ul>
+  <li><strong>No name-pattern allow/deny list for BYOK</strong> (e.g. no hardcoded <code>/ollama/i</code>).
+    Rationale: the <em>presence of <code>copilotUsageNanoAiu</code></em> plus the rate-table membership is a
+    sharper signal than provider-name guessing. Avoids false positives like the legitimate
+    <code>raptor-mini</code> fine-tune.</li>
+  <li><strong>Non-billable credits are still estimated and shown</strong> (in their own table) so users can see
+    how much their local-model traffic <em>would</em> cost on Copilot — useful for capacity planning. Just not
+    summed into the billed total.</li>
+  <li><strong>10% auto-discount on rate-estimates not yet applied</strong>; the API-exact path already
+    reflects it. Tracked as a follow-up — small effect.</li>
+</ul>
+
+<h2>4. Open questions</h2>
+<ul>
+  <li>Should the daily-limit guard treat non-billable usage as informational too (recommended) or still
+    pause Copilot when local-model spend would have exceeded the cap? Current behaviour: informational only
+    — it follows <code>aicSummary.totalCredits</code> which is now billable-only.</li>
+  <li>Should auto-detect-plan also flip <code>includeOnlyBilledModels</code> on/off? Currently the new
+    setting is plan-independent.</li>
+</ul>
+
+<h2>5. Files touched</h2>
+<ul>
+  <li><code>src/aicCredits.ts</code> — billable classifier (<code>isKnownGHCModel</code> + free function <code>classifyModelBillability</code>), cycle-window filter in <code>computeSummary</code>, three new <code>AICConfig</code> fields, summary now returns <code>nonBillable: { totalCredits, byModel }</code>. Caller's <code>billable</code> flag overrides the calculator's heuristic so the dashboard owns the decision.</li>
+  <li><code>src/dashboardData.ts</code> — every <code>creditEntries.push(...)</code> now stamps <code>billable</code> via the shared classifier (5 push sites: debug-requests, debug-byModel, parent-turn fallback, OTel live, OMP/Pi agent). New post-processing step backfills <code>isBillable</code> on every <code>liveOtel.byModel</code> row and recomputes <code>liveOtel.sessionAIC</code> from billable-only rows when <code>includeOnlyBilledModels</code> is on. <code>AICDashboardData.nonBillable</code> is populated from <code>summary.nonBillable</code>.</li>
+  <li><code>src/extension.ts</code> — <code>getAICConfig()</code> reads three new <code>cfg.get(...)</code> values, falling back to <code>DEFAULT_AIC_CONFIG</code>.</li>
+  <li><code>package.json</code> — three new <code>copilotUsage.aic.*</code> entries in the AIC configuration block with descriptions referencing issue #5.</li>
+  <li><code>src/dashboardPanel.ts</code> — <code>renderAIC()</code> appends a "Non-billable models (informational)" sub-table with a dashed-border separator, muted-colour numbers, and a footnote clarifying that the credits shown there are estimates and excluded from the billed total above.</li>
+  <li><code>tests/verify-billable-classification.ts</code> — six checks: known model + actual credits, Ollama, unknown local model, cycle window filtering, <code>extraBilledModels</code> escape hatch, <code>excludeModels</code> override, master-switch-off legacy mode.</li>
+</ul>
+
+<h2>6. Verification</h2>
+<table>
+  <tr><th>Check</th><th>Result</th></tr>
+  <tr><td><code>npx tsc --noEmit</code> (whole tree)</td><td class="ok">clean</td></tr>
+  <tr><td><code>tests/verify-billable-classification.ts</code> (new, 8 assertions)</td><td class="ok">all pass</td></tr>
+  <tr><td><code>tests/verify-dashboard-vs-api.js</code> (8 dashboard ↔ API assertions)</td><td class="ok">all pass</td></tr>
+  <tr><td><code>tests/verify-no-drift.js</code> (raw ↔ scanner ↔ dashboard, 9 checks)</td><td class="ok">8 pass, 1 known RACE row (writes during scan — unrelated)</td></tr>
+  <tr><td><code>tests/verify-sidebar-dashboard-parity.js</code></td><td class="warn">1 failure pre-existing on <code>main</code> (<code>byModel.length ≤ 5</code> assertion is stale; data has 10 billable models). Not introduced by this change.</td></tr>
+  <tr><td><code>tests/verify-live-aic-reconciliation.js</code></td><td class="warn">Same pre-existing assertion (<code>actual=11 expected=5</code>) reproducible on <code>main</code> before edits.</td></tr>
+</table>
+
+<h2>7. Behaviour matrix</h2>
+<table>
+  <tr><th>Entry source</th><th>Has nanoAiu?</th><th>Model in rate table?</th><th>Default classification</th><th>Counts toward billed total?</th></tr>
+  <tr><td>Debug log <code>llm_request</code></td><td>yes</td><td>yes</td><td>billable</td><td>yes</td></tr>
+  <tr><td>Debug log <code>llm_request</code></td><td>yes</td><td>no</td><td>billable<sup>1</sup></td><td>yes</td></tr>
+  <tr><td>OTel live trace (Ollama)</td><td>no</td><td>no</td><td>non-billable</td><td>no — shown in info panel</td></tr>
+  <tr><td>OTel live trace (claude-sonnet)</td><td>no</td><td>yes</td><td>billable (rate estimate)</td><td>yes — replaced by exact nanoAiu when flushed</td></tr>
+  <tr><td>OMP/Pi agent (claude via Copilot)</td><td>no (rate-derived)</td><td>yes</td><td>billable</td><td>yes</td></tr>
+  <tr><td>OMP/Pi agent (Ollama)</td><td>no (rate-derived)</td><td>no</td><td>non-billable<sup>2</sup></td><td>no</td></tr>
+</table>
+<p><small><sup>1</sup> nanoAiu&gt;0 is the strongest "GitHub billed it" signal — trusted even if the model name is new and not yet in the rate table.<br>
+<sup>2</sup> Even though the OMP/Pi path attaches a rate-derived <code>actualCredits</code> for display, the dashboard now passes an explicit <code>billable</code> flag from <code>classifyModelBillability(...)</code> so the calculator doesn't mistake locally-computed credits for API-billed ones.</small></p>
+
+<h2>8. Research — Standard ways to scope "GitHub-billable" usage from logs</h2>
+
+<p>Follow-up to issue #5: the v1 fix relies on a substring match against the
+built-in <code>DEFAULT_MODEL_COSTS</code> rate table as the default arbiter.
+That heuristic is fragile (new preview models look "unknown" until the table
+is updated by hand; a BYOK model ID can accidentally substring-match a known
+family). The question we set out to answer was: <em>what authoritative,
+documented signals could we use instead?</em></p>
+
+<h3>8a. Signal inventory — ranked by reliability</h3>
+<table>
+  <tr><th>#</th><th>Signal</th><th>Reliability</th><th>Where it lives</th><th>Status in code</th></tr>
+  <tr>
+    <td>1</td>
+    <td><code>attrs.copilotUsageNanoAiu</code> in debug-log <code>llm_request</code></td>
+    <td class="ok">100% authoritative</td>
+    <td>Copilot's own debug log only (<code>~/.../GitHub.copilot-chat/debug-logs/&lt;sid&gt;/main.jsonl</code>)</td>
+    <td class="ok">Already the gold-standard signal (precedence rule #2)</td>
+  </tr>
+  <tr>
+    <td>2</td>
+    <td>Copilot CAPI <code>/models</code> → <code>billing.multiplier &gt; 0</code></td>
+    <td class="ok">Canonical &mdash; same source the Copilot Chat endpoint uses</td>
+    <td><code>https://api.individual.githubcopilot.com/models</code> (Bearer = Copilot internal token minted at <code>https://api.github.com/copilot_internal/v2/token</code>)</td>
+    <td class="ok">Added in v1.10.12 via <code>src/modelCatalog.ts</code> &rarr; classifier precedence #5</td>
+  </tr>
+  <tr>
+    <td>3</td>
+    <td>CDN known-models manifest (provider key)</td>
+    <td class="ok">High &mdash; same URL the official Copilot Chat extension reads on startup (<code>BYOKContrib.fetchKnownModelList()</code>)</td>
+    <td><code>https://main.vscode-cdn.net/extensions/copilotChat.json</code> &rarr; <code>modelInfo.copilot</code> for billable, other providers for BYOK-only</td>
+    <td class="ok">Added in v1.10.12 (same module). Treated as base layer beneath CAPI.</td>
+  </tr>
+  <tr>
+    <td>4</td>
+    <td>chatSession <code>selectedModel.metadata.vendor === "copilot"</code> + <code>extension.value === "GitHub.copilot-chat"</code></td>
+    <td class="warn">High for chat traffic only; not present on OTel spans</td>
+    <td><code>chat-sessions/*.json</code></td>
+    <td class="warn">Not wired yet &mdash; future improvement if catalog proves insufficient</td>
+  </tr>
+  <tr>
+    <td>5</td>
+    <td>Rate-table substring match (built-in <code>DEFAULT_MODEL_COSTS</code>)</td>
+    <td class="warn">Medium &mdash; manual updates required, false positives possible</td>
+    <td><code>src/aicCredits.ts</code></td>
+    <td class="ok">Still used as final fallback (precedence rule #6)</td>
+  </tr>
+  <tr>
+    <td>6</td>
+    <td>GitHub Models marketplace catalog (<code>https://models.github.ai/catalog/models</code>)</td>
+    <td class="bad">Low &mdash; different surface (Marketplace, not Copilot)</td>
+    <td>Public JSON, no auth</td>
+    <td class="bad">Not used &mdash; model list does not match the Copilot-billable set.</td>
+  </tr>
+</table>
+
+<h3>8b. Signals we looked for but that are <em>not</em> in the debug log</h3>
+<p>Verified by dumping every <code>attrs.*</code> key on a real
+<code>llm_request</code> entry from a current debug log. The complete attribute
+set is:
+<code>model, debugName, inputTokens, outputTokens, cachedTokens, ttft,
+responseId, userRequest, inputMessages, maxTokens, requestOptions,
+requestShape, <strong>copilotUsageNanoAiu</strong>, systemPromptFile,
+toolsFile</code>. There is <strong>no</strong> <code>byok</code>,
+<code>vendor</code>, <code>endpoint</code>, <code>customModel</code>, or
+provider hint &mdash; so at the debug-log level <code>copilotUsageNanoAiu</code>
+presence is the <em>only</em> direct signal of GitHub billing. The good news:
+the Copilot extension only ever writes its own debug log, so every
+<code>llm_request</code> entry in that file is already scoped to Copilot
+traffic. Local Ollama / LM Studio called via a different extension never
+appears there at all.</p>
+
+<h3>8c. Why this changes the OTel path too</h3>
+<p>The OTel receiver listens on <code>127.0.0.1:14318</code> &mdash; the endpoint
+the Copilot Chat extension is configured to push to. Spans follow the
+OpenTelemetry GenAI semantic conventions
+(<code>gen_ai.request.model</code>, <code>gen_ai.usage.prompt_tokens</code>,
+&hellip;). Crucially, <strong>no <code>byok</code> / <code>vendor</code> /
+<code>billing.multiplier</code> attribute is present on the span</strong>
+&mdash; that determination happens later when the API response comes back.
+So if a user has configured Ollama as a BYOK model <em>inside</em> Copilot
+Chat itself, the OTel exporter ships a regular GenAI span with the Ollama
+model id, and the old heuristic had no way to know GitHub didn't bill it.
+The catalog lookup fixes this: any model id that lives under a non-<code>copilot</code>
+provider in the CDN manifest (or returns <code>multiplier === 0</code> from
+CAPI) is now classified as non-billable up-front, regardless of substring
+matches against the rate table.</p>
+
+<h3>8d. Updated classifier precedence (v1.10.12)</h3>
+<pre>1. config.excludeModels         &rarr; force NON-billable
+2. hasActualCredits === true    &rarr; force billable (nanoAiu from GitHub)
+3. config.extraBilledModels     &rarr; force billable
+4. includeOnlyBilledModels===false &rarr; everything is billable (legacy mode)
+5. <strong>online catalog lookup    &rarr; use entry.billable (CAPI &gt; CDN)</strong>
+6. calculator.isKnownGHCModel() &rarr; fallback rate-table heuristic
+7. otherwise                    &rarr; NON-billable</pre>
+
+<h3>8e. New setting</h3>
+<p><code>copilotUsage.aic.useOnlineModelCatalog</code> (boolean, default
+<code>true</code>) &mdash; gates rule #5. When disabled, the extension operates
+fully offline using only the built-in rate table (the v1.10.11 behaviour).
+The catalog is cached for 24h in <code>globalState</code>, hydrated
+synchronously at activation, then refreshed in the background. Both fetches
+are best-effort and silent on failure.</p>
+
+<h3>8f. Files added / changed for v1.10.12</h3>
+<ul>
+  <li><code>src/modelCatalog.ts</code> &mdash; <strong>new</strong>. Hydrates the
+  CDN manifest + Copilot CAPI <code>/models</code> response into a synchronous
+  lookup table.</li>
+  <li><code>src/aicCredits.ts</code> &mdash; <code>classifyModelBillability()</code>
+  gains an optional <code>catalogLookup</code> parameter (precedence rule #5).
+  Existing callers that omit the parameter retain v1.10.11 semantics.</li>
+  <li><code>src/dashboardData.ts</code> &mdash; both classifier call sites now pass
+  <code>classifyByCatalog</code> from <code>modelCatalog.ts</code>.</li>
+  <li><code>src/extension.ts</code> &mdash; reads the new setting and invokes
+  <code>loadCatalog()</code> at activation (fire-and-forget).</li>
+  <li><code>package.json</code> &mdash; new <code>useOnlineModelCatalog</code>
+  configuration property.</li>
+  <li><code>tests/verify-catalog-lookup.ts</code> &mdash; <strong>new</strong>,
+  9 assertions covering catalog hits (both directions), misses, and that the
+  existing precedence rules (<code>excludeModels</code>,
+  <code>hasActualCredits</code>) still outrank the catalog.</li>
+</ul>
+
+</body>
+</html>

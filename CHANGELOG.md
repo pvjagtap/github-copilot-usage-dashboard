@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.12] - 2026-06-23
+
+### Added
+
+- **Authoritative GitHub model catalog (CDN + per-plan CAPI).** New `modelCatalog.ts` fetches the same two Microsoft-published sources `vscode-copilot-chat` itself reads: the BYOK known-models manifest at `main.vscode-cdn.net/extensions/copilotChat.json` (informational) and the Copilot CAPI `/models` endpoint (authoritative billing). Cached for 24h in `globalState`; failures fall back silently to the existing rate-table heuristic. New hidden setting `copilotUsage.aic.useOnlineModelCatalog` (default `true`) as a kill switch.
+- **Per-plan CAPI host resolution — no more hardcoded individual-tier endpoint.** The token response from `/copilot_internal/v2/token` already includes `endpoints.api` keyed to the user's SKU (`api.individual.…`, `api.business.…`, `api.enterprise.…` per `microsoft/vscode-copilot-chat`'s `TokenEnvelope`). The model-catalog refresh now reads that field instead of hardcoding the host, so Business and Enterprise users automatically hit the right CAPI without configuration. The refresh also walks the same scope-candidate list as `planDetector.ts` so any pre-existing silent GitHub session is reused.
+- **Refresh on GitHub session change.** Subscribed to `vscode.authentication.onDidChangeSessions` (provider=github) — signing in, signing out, or switching between individual/business/enterprise accounts immediately re-fetches the catalog against the new account's CAPI host.
+- **Third-party / BYOK / Ollama detection from the user's own VS Code config.** New `chatLanguageModelsParser.ts` (pure, no `vscode` import) parses `<UserDir>/chatLanguageModels.json`. Any model id whose `vendor` is **unambiguously** non-`copilot` (Anthropic BYOK key, OpenAI BYOK key, Ollama, LM Studio, …) is treated as non-billable by the classifier. Same id under multiple vendors → dropped (safe).
+- **Runtime BYOK detection via `vscode.lm.selectChatModels()`.** Complements the JSON-file reader by enumerating every chat model currently registered with VS Code — catches BYOK API-key providers as soon as the user pastes a key, plus dynamically-discovered Ollama models that never make it into the persisted JSON file. Merged with the file source via `mergeThirdPartyMaps` (conflict-aware: same vendor in both → keep; disagree → drop). Subscribed to `vscode.lm.onDidChangeChatModels` so adding/removing a BYOK key triggers an immediate refresh — no window reload needed.
+
+### Changed
+
+- **CDN manifest is now informational-only.** Earlier work briefly used the CDN's `"copilot"` provider entry to mark models billable — but verification (`tests/verify-online-catalog.ts`) confirmed the CDN file lists **only** BYOK providers (OpenAI, Anthropic, Gemini, Groq, xAI). The classifier now ignores CDN-derived data for billability decisions and uses CAPI `/models` exclusively. Same id appearing in both BYOK list and Copilot billable set (e.g. `claude-opus-4-7`) no longer causes wrongful demotion.
+- **`tests/verify-online-catalog.ts` simplified to CDN-only smoke test** with live HTTP headers (`date`, `last-modified`, `etag`, `x-azure-ref`, `x-cache`) and SHA-256 body hash so each run can be visibly proven to be a real network round-trip. CAPI verification is documented to happen in the "Copilot Usage" output channel inside the running extension — `gh` CLI's OAuth app is not in Copilot's allowed-OAuth-app list (returns 404 from `/copilot_internal/v2/token`), so standalone Node cannot reach CAPI.
+
+### Tests
+
+- `tests/verify-billable-classification.ts`: **8/8** (unchanged).
+- `tests/verify-catalog-lookup.ts`: expanded from **9 → 19 assertions** — added coverage for parser, ambiguous-id rejection, runtime↔file merge agreement, and disagreement-drop.
+
 ## [1.10.11] - 2026-06-22
 
 ### Fixed

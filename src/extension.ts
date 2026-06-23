@@ -18,6 +18,7 @@ import { LimitOverlay } from "./limitOverlay";
 import { Enforcement } from "./enforcement";
 import { HookManager } from "./hookManager";
 import { detectAndApplyPlan, resetPlanDetection } from "./planDetector";
+import { loadCatalog as loadModelCatalog } from "./modelCatalog";
 
 const OTEL_PORT = 14318;
 /**
@@ -82,6 +83,13 @@ function getAICConfig(): AICConfig {
     overageCostPerCredit:
       cfg.get<number>("overageCostPerCredit") ?? DEFAULT_AIC_CONFIG.overageCostPerCredit,
     customModelCosts: cfg.get("customModelCosts") ?? DEFAULT_AIC_CONFIG.customModelCosts,
+    // Issue #5 — scope billable totals to models GitHub actually bills.
+    includeOnlyBilledModels:
+      cfg.get<boolean>("includeOnlyBilledModels") ?? DEFAULT_AIC_CONFIG.includeOnlyBilledModels,
+    excludeModels:
+      cfg.get<string[]>("excludeModels") ?? DEFAULT_AIC_CONFIG.excludeModels,
+    extraBilledModels:
+      cfg.get<string[]>("extraBilledModels") ?? DEFAULT_AIC_CONFIG.extraBilledModels,
   };
 }
 
@@ -166,6 +174,67 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // session is missing or the SKU is unrecognised. Fire-and-forget so we
   // never block activation on a network call.
   void detectAndApplyPlan(context, m => output.appendLine(m));
+
+  // Hydrate the authoritative GitHub model catalog (CDN known-models manifest
+  // + Copilot CAPI /models). Used by `classifyModelBillability` as a stronger
+  // signal than the built-in rate-table heuristic — see `modelCatalog.ts` and
+  // issue #5. Best-effort, network failures are silent.
+  const onlineCatalogEnabled = vscode.workspace
+    .getConfiguration("copilotUsage.aic")
+    .get<boolean>("useOnlineModelCatalog") ?? true;
+  void loadModelCatalog(context, {
+    enabled: onlineCatalogEnabled,
+    log: m => output.appendLine(m),
+  });
+
+  // Refresh the catalog whenever the user's GitHub authentication changes
+  // (sign-in, sign-out, account switch between individual/business/enterprise).
+  // The CAPI host comes back as `endpoints.api` in the token response, which
+  // is plan-aware — so signing into a Business account automatically points
+  // the next `/models` fetch at `api.business.githubcopilot.com`, and likewise
+  // for Enterprise. Without this listener the user would have to reload the
+  // window for the new plan's models to show up.
+  context.subscriptions.push(
+    vscode.authentication.onDidChangeSessions(e => {
+      if (e.provider.id !== "github") {
+        return;
+      }
+      output.appendLine("auth: GitHub session changed — refreshing model catalog");
+      const enabledNow = vscode.workspace
+        .getConfiguration("copilotUsage.aic")
+        .get<boolean>("useOnlineModelCatalog") ?? true;
+      void loadModelCatalog(context, {
+        enabled: enabledNow,
+        log: m => output.appendLine(m),
+        refreshNow: true,
+      });
+    })
+  );
+
+  // Refresh the catalog whenever VS Code's set of registered chat models
+  // changes — i.e. the user added or removed a BYOK API key (Anthropic,
+  // OpenAI, Gemini, …), installed/disabled an Ollama-style provider
+  // extension, etc. `vscode.lm.selectChatModels()` reflects exactly this
+  // set, so we re-read it to keep the third-party id → vendor map current.
+  try {
+    if (vscode.lm && typeof vscode.lm.onDidChangeChatModels === "function") {
+      context.subscriptions.push(
+        vscode.lm.onDidChangeChatModels(() => {
+          output.appendLine("lm: chat-model registry changed — refreshing model catalog");
+          const enabledNow = vscode.workspace
+            .getConfiguration("copilotUsage.aic")
+            .get<boolean>("useOnlineModelCatalog") ?? true;
+          void loadModelCatalog(context, {
+            enabled: enabledNow,
+            log: m => output.appendLine(m),
+            refreshNow: true,
+          });
+        })
+      );
+    }
+  } catch (err) {
+    output.appendLine(`lm: onDidChangeChatModels subscription failed — ${String(err)}`);
+  }
 
   // Initial scan of chatSession files — MUST complete before activate()
   // returns so the dashboard, status bar, and any "openDashboard" command

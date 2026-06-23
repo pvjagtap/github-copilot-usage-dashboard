@@ -72,20 +72,38 @@ export interface CreditUsage {
 
 /**
  * Aggregated credit summary for a time period.
+ *
+ * Only **billable** entries contribute to the headline totals
+ * (`totalCredits`, `inputCredits`, `outputCredits`, `cachedCredits`, `byModel`,
+ * `byDay`, `creditsRemaining`, `estimatedOverageCost`, `dailyAverage`,
+ * `projectedTotal`). Non-billable entries — usage from local Ollama / LM Studio
+ * / BYOK keys / unrecognised models that GitHub's backend does not bill — are
+ * surfaced separately under `nonBillable` for informational display only.
+ * See issue #5: <https://github.com/pvjagtap/github-copilot-usage-dashboard/issues/5>
  */
 export interface CreditSummary {
-  /** Total credits consumed */
+  /** Total credits consumed (billable only) */
   totalCredits: number;
-  /** Credits from input tokens */
+  /** Credits from input tokens (billable only) */
   inputCredits: number;
-  /** Credits from output tokens */
+  /** Credits from output tokens (billable only) */
   outputCredits: number;
-  /** Credits from cached tokens */
+  /** Credits from cached tokens (billable only) */
   cachedCredits: number;
-  /** Per-model breakdown */
+  /** Per-model breakdown (billable only) */
   byModel: Map<string, CreditUsage>;
-  /** Per-day breakdown */
+  /** Per-day breakdown (billable only) */
   byDay: Map<string, number>;
+  /**
+   * Informational summary for non-billable entries (BYOK, local Ollama, etc.).
+   * Credit values here are *rate-table estimates* of what the same usage
+   * would cost on GitHub Copilot — useful for capacity planning but NOT
+   * what GitHub will bill the user.
+   */
+  nonBillable: {
+    totalCredits: number;
+    byModel: Map<string, CreditUsage>;
+  };
   /** Plan budget info */
   plan: PlanConfig;
   /** Credits remaining in billing cycle (-1 if unlimited) */
@@ -317,6 +335,23 @@ export class AICCalculator {
   }
 
   /**
+   * Whether `modelName` is recognised as a GitHub-Copilot-billable model.
+   *
+   * Used by issue #5 to filter out local Ollama / LM Studio / BYOK models
+   * (which VS Code still routes through its chat OTel pipeline but which
+   * GitHub does NOT bill in AI Credits) so they don't inflate the dashboard's
+   * billable total.
+   *
+   * A model is considered "known GHC" iff it matches an entry in the rate
+   * table (default + any user-supplied `customModelCosts`). The match uses
+   * the same normalization as `findModelRate()` so e.g. "claude-opus-4-6"
+   * and "claude-opus-4.6" both resolve.
+   */
+  isKnownGHCModel(modelName: string): boolean {
+    return this.findModelRate(modelName) !== null;
+  }
+
+  /**
    * Find the best matching cost rate for a model name.
    * Uses substring matching for flexibility with normalization:
    * OTel reports model names with hyphens (e.g., "claude-opus-4-6") while the
@@ -412,6 +447,22 @@ export class AICCalculator {
 
   /**
    * Compute a full credit summary from session data.
+   *
+   * Each entry is classified as **billable** or **non-billable** before being
+   * accumulated. Headline totals reflect billable usage only; non-billable
+   * usage (BYOK / local Ollama / unrecognised models without
+   * `copilotUsageNanoAiu`) is surfaced separately under `nonBillable`.
+   * See issue #5.
+   *
+   * An entry is treated as billable when:
+   *   • `actualCredits > 0` (GitHub's backend already billed it), OR
+   *   • `entry.billable === true` (caller forced it on, e.g. allow-list), OR
+   *   • `entry.billable` is undefined AND the model is known to the rate table.
+   *
+   * The summary is also restricted to the current billing cycle window —
+   * previously every entry since the AIC effective date (`2026-06-01`) was
+   * counted, which over-reported once a user crossed a cycle boundary or had
+   * a non-day-1 cycle start.
    */
   computeSummary(
     entries: Array<{
@@ -422,8 +473,18 @@ export class AICCalculator {
       date: string; // ISO date "YYYY-MM-DD"
       /** If set, use this as the actual credits instead of computing from rates */
       actualCredits?: number;
+      /**
+       * Caller-supplied billable override. When undefined, the calculator
+       * decides via `actualCredits > 0` OR `isKnownGHCModel(model)`.
+       */
+      billable?: boolean;
     }>,
   ): CreditSummary {
+    // Billing-cycle window — entries outside this window are dropped so the
+    // dashboard total matches "what GitHub will bill you this cycle" rather
+    // than "everything since June 1". (Fix #2 in issue #5.)
+    const { start, end, daysRemaining } = this._getBillingCycle();
+
     const byModel = new Map<string, CreditUsage>();
     const byDay = new Map<string, number>();
     let totalCredits = 0;
@@ -431,7 +492,19 @@ export class AICCalculator {
     let totalOutput = 0;
     let totalCached = 0;
 
+    // Non-billable bucket (informational only — never sums into headline totals
+    // or budget math).
+    const nonBillableByModel = new Map<string, CreditUsage>();
+    let nonBillableTotal = 0;
+
     for (const entry of entries) {
+      // Cycle-window filter. Empty/"unknown" dates are kept (callers like the
+      // agent-session path may pass dates derived from agent metadata).
+      const day = entry.date || "unknown";
+      if (day !== "unknown" && (day < start || day > end)) {
+        continue;
+      }
+
       let usage: CreditUsage;
       if (entry.actualCredits !== undefined && entry.actualCredits > 0) {
         // API-reported actual credits (includes cache discounts) — authoritative total.
@@ -480,6 +553,36 @@ export class AICCalculator {
         );
       }
 
+      // Billable classification. Caller's explicit `billable` flag wins —
+      // the dashboard knows things the calculator can't (e.g. "this OMP/Pi
+      // agent call uses an Ollama model and shouldn't count as billed even
+      // though we attached our own rate-derived `actualCredits` to it").
+      // When the caller doesn't decide, `actualCredits > 0` (i.e. the value
+      // came straight from GitHub's `copilotUsageNanoAiu`) is the next-best
+      // positive signal, falling back to "is this a known GHC model?".
+      let isBillable: boolean;
+      if (entry.billable !== undefined) {
+        isBillable = entry.billable;
+      } else if (entry.actualCredits !== undefined && entry.actualCredits > 0) {
+        isBillable = true;
+      } else {
+        isBillable = this.isKnownGHCModel(entry.model);
+      }
+
+      if (!isBillable) {
+        nonBillableTotal += usage.totalCredits;
+        const existing = nonBillableByModel.get(usage.model);
+        if (existing) {
+          existing.inputCredits += usage.inputCredits;
+          existing.outputCredits += usage.outputCredits;
+          existing.cachedCredits += usage.cachedCredits;
+          existing.totalCredits += usage.totalCredits;
+        } else {
+          nonBillableByModel.set(usage.model, { ...usage });
+        }
+        continue;
+      }
+
       totalCredits += usage.totalCredits;
       totalInput += usage.inputCredits;
       totalOutput += usage.outputCredits;
@@ -497,12 +600,10 @@ export class AICCalculator {
       }
 
       // Aggregate by day
-      const day = entry.date || "unknown";
       byDay.set(day, (byDay.get(day) ?? 0) + usage.totalCredits);
     }
 
     // Billing cycle calculations
-    const { start, end, daysRemaining } = this._getBillingCycle();
     const daysElapsed = this._getDaysElapsed(start);
     const dailyAverage = daysElapsed > 0 ? totalCredits / daysElapsed : totalCredits;
     const projectedTotal = dailyAverage * (daysElapsed + daysRemaining);
@@ -520,6 +621,10 @@ export class AICCalculator {
       cachedCredits: totalCached,
       byModel,
       byDay,
+      nonBillable: {
+        totalCredits: nonBillableTotal,
+        byModel: nonBillableByModel,
+      },
       plan: this.plan,
       creditsRemaining,
       estimatedOverageCost: overage * this.plan.overageCostPerCredit,
@@ -611,6 +716,26 @@ export interface AICConfig {
     cacheWriteCreditsPerMillion: number;
     tier: "base" | "premium" | "custom";
   }>;
+  /**
+   * When true (default), only models GitHub bills in AI Credits contribute
+   * to the headline total / budget bar / projected spend. Local Ollama /
+   * LM Studio / BYOK keys / unrecognised models are still tracked and shown
+   * in a separate "non-billable" panel for capacity planning, but excluded
+   * from the billed-cost math. See issue #5.
+   */
+  includeOnlyBilledModels: boolean;
+  /**
+   * Explicit caller-supplied model substrings to FORCE-EXCLUDE from billable
+   * totals (even if they otherwise match the GHC rate table). Useful for
+   * marking a particular alias as non-billable.
+   */
+  excludeModels: string[];
+  /**
+   * Model substrings to FORCE-INCLUDE as billable even when they don't match
+   * the rate table. Escape hatch for new preview models that arrive before
+   * the rate table is updated.
+   */
+  extraBilledModels: string[];
 }
 
 export const DEFAULT_AIC_CONFIG: AICConfig = {
@@ -619,6 +744,9 @@ export const DEFAULT_AIC_CONFIG: AICConfig = {
   monthlyCreditsIncluded: 1900,
   overageCostPerCredit: 0.01,
   customModelCosts: [],
+  includeOnlyBilledModels: true,
+  excludeModels: [],
+  extraBilledModels: [],
 };
 
 /**
@@ -648,4 +776,78 @@ export function createCalculatorFromConfig(config: AICConfig): AICCalculator {
   }
 
   return new AICCalculator(allCosts, plan);
+}
+
+/**
+ * Decide whether a single (model, hasActualCredits) pair is billable under
+ * the supplied config. Pure function — shared by `dashboardData.ts` and the
+ * unit tests so the classification stays in one place.
+ *
+ * Precedence (highest first):
+ *   1. `config.excludeModels`           — substring match → NON-billable, always.
+ *   2. `hasActualCredits === true`      — GitHub's backend already billed it → billable.
+ *   3. `config.extraBilledModels`       — substring match → billable.
+ *   4. `config.includeOnlyBilledModels === false` → everything else billable.
+ *   5. Online catalog lookup            — if the model id is present in the
+ *      authoritative GitHub model catalog (see `modelCatalog.ts`), use its
+ *      `billable` flag directly. This catches new GA / preview models the
+ *      built-in rate table has not yet been updated for, and conversely
+ *      marks CDN-listed BYOK model IDs as non-billable.
+ *   6. `calculator.isKnownGHCModel(model)` → billable.
+ *   7. Otherwise NON-billable.
+ *
+ * The catalog lookup is injected via the optional `catalogLookup` callback
+ * to keep this module free of side effects and easy to test — the production
+ * wiring in `dashboardData.ts` passes `classifyByCatalog` from
+ * `modelCatalog.ts`.
+ */
+export type CatalogLookup = (modelName: string) => { billable: boolean } | null;
+
+export function classifyModelBillability(
+  calculator: AICCalculator,
+  config: AICConfig,
+  modelName: string,
+  hasActualCredits: boolean,
+  catalogLookup?: CatalogLookup,
+): boolean {
+  const lower = (modelName || "").toLowerCase();
+
+  // 1. Explicit exclude wins over everything else (lets the user mark a
+  //    particular alias as informational even if the rate table knows it).
+  for (const pat of config.excludeModels ?? []) {
+    if (pat && lower.includes(pat.toLowerCase())) {
+      return false;
+    }
+  }
+
+  // 2. The strongest positive signal: GitHub's backend already billed it.
+  if (hasActualCredits) {
+    return true;
+  }
+
+  // 3. User-supplied allowlist (preview models not yet in the rate table).
+  for (const pat of config.extraBilledModels ?? []) {
+    if (pat && lower.includes(pat.toLowerCase())) {
+      return true;
+    }
+  }
+
+  // 4. Master switch off → preserve legacy behaviour (everything counts).
+  if (config.includeOnlyBilledModels === false) {
+    return true;
+  }
+
+  // 5. Authoritative online catalog (CDN manifest + Copilot CAPI /models).
+  //    A hit here outranks the local rate-table heuristic in both directions
+  //    — including marking BYOK model IDs (e.g. ollama/qwen) as non-billable
+  //    even though their family name might substring-match a known model.
+  if (catalogLookup) {
+    const hit = catalogLookup(modelName);
+    if (hit) {
+      return hit.billable;
+    }
+  }
+
+  // 6. Default: only known GHC models are billable.
+  return calculator.isKnownGHCModel(modelName);
 }

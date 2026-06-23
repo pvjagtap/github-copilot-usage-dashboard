@@ -6,7 +6,8 @@
 import { ScanResult, Session, Turn, ToolCall, Subagent, ScanStats, DebugRequest } from "./scanner";
 import { AgentScanResult } from "./agentScanner";
 import { LiveStats, OTelRequest } from "./otelReceiver";
-import { AICCalculator, AICConfig, DEFAULT_AIC_CONFIG, createCalculatorFromConfig, getPromoInfo } from "./aicCredits";
+import { AICCalculator, AICConfig, DEFAULT_AIC_CONFIG, createCalculatorFromConfig, getPromoInfo, classifyModelBillability } from "./aicCredits";
+import { classifyByCatalog } from "./modelCatalog";
 
 /**
  * AIC billing effective date. Only sessions/turns on or after this date
@@ -283,6 +284,24 @@ export interface AICDashboardData {
   byDay: Array<{ day: string; credits: number }>;
   /** Current AIC configuration for display */
   config: AICConfig;
+  /**
+   * Informational summary of usage from models GitHub does NOT bill in
+   * AI Credits (local Ollama / LM Studio / BYOK keys / unrecognised models).
+   * Credits here are rate-table estimates of what the same traffic would
+   * cost on Copilot — NOT what the user will be charged. Excluded from the
+   * billable headline totals above. See issue #5.
+   */
+  nonBillable: {
+    totalCredits: number;
+    byModel: Array<{
+      model: string;
+      tier: string;
+      inputCredits: number;
+      outputCredits: number;
+      cachedCredits: number;
+      totalCredits: number;
+    }>;
+  };
   /** Promotional period info */
   promo: {
     /** Whether we are currently in the promo window (June 1 – Sept 1, 2026) */
@@ -331,6 +350,12 @@ export interface LiveOtelData {
      * prompt/completion/cached tokens when no billed value is available.
      */
     aicCredits: number;
+    /**
+     * Whether this model is billed by GitHub Copilot. False for local
+     * Ollama / LM Studio / BYOK / unrecognised models. Non-billable rows
+     * are excluded from `sessionAIC` / `lastRequestAIC` (issue #5).
+     */
+    isBillable: boolean;
   }>;
   /** Session-cumulative AIC credits computed from live OTel data */
   sessionAIC: number;
@@ -615,6 +640,8 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
         metricCached: live?.metricCached ?? 0,
         cached: live?.cached ?? (exact?.cached ?? 0) + (pending?.cached ?? 0),
         aicCredits: roundCredits(credits),
+        // Backfilled by the post-processor that runs after the if/else chain.
+        isBillable: false,
       };
     });
     const pendingSessionAIC = Array.from(pendingByModel.values()).reduce((sum, row) => sum + row.credits, 0);
@@ -769,6 +796,8 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
         byModel: Array.from(byModelMap.values()).map(row => ({
           ...row,
           aicCredits: Math.round(row.aicCredits * 100) / 100,
+          // Backfilled by the post-processor below.
+          isBillable: false,
         })),
         sessionAIC: Math.round(sessionAIC * 100) / 100,
         lastRequestAIC: Math.round(((mostRecentRequest?.nanoAiu ?? 0) / 1e9) * 100) / 100,
@@ -929,6 +958,8 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
         byModel: Array.from(byModelMap.values()).map(row => ({
           ...row,
           aicCredits: Math.round(row.aicCredits * 100) / 100,
+          // Backfilled by the post-processor below.
+          isBillable: false,
         })),
         // No ratchet — see OTel branch above for rationale.
         sessionAIC: Math.round(sessionAIC * 100) / 100,
@@ -937,6 +968,28 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
     } else {
       liveOtel = { requests: 0, prompt: 0, completion: 0, cached: 0, traceCached: 0, metricCached: 0, lastSeen: "", source: "none", byModel: [], sessionAIC: 0, lastRequestAIC: 0 };
     }
+  }
+
+  // ─── Billable scope for live OTel display (issue #5) ──────────
+  // Stamp each per-model row with `isBillable` so the webview can flag
+  // informational (Ollama / BYOK / unknown) traffic. When
+  // `includeOnlyBilledModels` is on (the default), exclude those rows from
+  // the headline `sessionAIC` so live AIC reconciles with the cycle total.
+  // `lastRequestAIC` is intentionally left untouched — it shows the user
+  // the LATEST request's value (even if non-billable), which is the most
+  // useful debugging signal.
+  liveOtel.byModel = liveOtel.byModel.map(row => ({
+    ...row,
+    // For display classification we rely on the model identity alone — we
+    // can't trust `row.aicCredits > 0` as a "GitHub billed it" signal here
+    // because the OTel branch may have populated it from rate estimates.
+    isBillable: classifyModelBillability(calculator, config, row.model, false, classifyByCatalog),
+  }));
+  if (config.includeOnlyBilledModels !== false) {
+    const billableSession = liveOtel.byModel
+      .filter(r => r.isBillable)
+      .reduce((s, r) => s + r.aicCredits, 0);
+    liveOtel.sessionAIC = Math.round(billableSession * 100) / 100;
   }
 
   // Limit turnsAll to most recent 500 to keep webview payload small
@@ -975,6 +1028,12 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
   // Otherwise fall back to a single entry stamped with the parent turn's
   // modelFamily (legacy behaviour for debug logs that predate per-request
   // model capture, or non-debug-log turns).
+  // Each entry carries an explicit `billable` flag. The dashboard is the
+  // single place that knows the model identity AND the user's preference
+  // (issue #5) — so we classify here, not inside `computeSummary`. This
+  // keeps non-billable (Ollama / BYOK / unknown) usage out of the headline
+  // total while still letting the calculator surface it under
+  // `summary.nonBillable` for an informational panel.
   const creditEntries: Array<{
     model: string;
     inputTokens: number;
@@ -982,7 +1041,10 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
     cachedTokens: number;
     date: string;
     actualCredits?: number;
+    billable: boolean;
   }> = [];
+  const classify = (model: string, hasActual: boolean): boolean =>
+    classifyModelBillability(calculator, config, model, hasActual, classifyByCatalog);
   for (const t of aicTurns) {
     if (t.debugRequests && t.debugRequests.length > 0) {
       for (const req of t.debugRequests) {
@@ -993,37 +1055,44 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
         if (date < AIC_EFFECTIVE_DATE) {
           continue;
         }
+        const hasNano = req.nanoAiu > 0;
         creditEntries.push({
           model: req.model,
           inputTokens: req.prompt,
           outputTokens: req.output,
           cachedTokens: req.cached,
           date,
-          actualCredits: req.nanoAiu > 0 ? req.nanoAiu / 1_000_000_000 : undefined,
+          actualCredits: hasNano ? req.nanoAiu / 1_000_000_000 : undefined,
+          billable: classify(req.model, hasNano),
         });
       }
     } else if (t.timestamp && t.debugByModel) {
       const date = t.timestamp.slice(0, 10);
       for (const [model, mt] of Object.entries(t.debugByModel)) {
+        const hasNano = mt.nanoAiu > 0;
         creditEntries.push({
           model,
           inputTokens: mt.prompt,
           outputTokens: mt.output,
           cachedTokens: mt.cached,
           date,
-          actualCredits: mt.nanoAiu > 0 ? mt.nanoAiu / 1_000_000_000 : undefined,
+          actualCredits: hasNano ? mt.nanoAiu / 1_000_000_000 : undefined,
+          billable: classify(model, hasNano),
         });
       }
     } else if (t.timestamp) {
       const date = t.timestamp.slice(0, 10);
+      const hasNano = t.debugAicCredits > 0;
+      const model = t.modelFamily || "unknown";
       creditEntries.push({
-        model: t.modelFamily || "unknown",
+        model,
         inputTokens: t.debugPromptTokens || t.promptTokens,
         outputTokens: t.debugOutputTokens || t.outputTokens,
         cachedTokens: 0, // cached not available per-turn from chatSession data
         date,
         // Actual AIC from API (if available) — overrides computed credits
-        actualCredits: t.debugAicCredits > 0 ? t.debugAicCredits : undefined,
+        actualCredits: hasNano ? t.debugAicCredits : undefined,
+        billable: classify(model, hasNano),
       });
     }
   }
@@ -1049,6 +1118,7 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
           cachedTokens: req.cachedTokens,
           date: todayStr,
           actualCredits: undefined,
+          billable: classify(req.modelName, false),
         });
       }
     } else {
@@ -1065,6 +1135,7 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
           cachedTokens: m.cached,
           date: todayStr,
           actualCredits: undefined,
+          billable: classify(m.model, false),
         });
       }
     }
@@ -1094,10 +1165,19 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
         piCalls  += session.llmCalls;
       }
 
-      // Per-model credit entries for AICCalculator
+      // Per-model credit entries for AICCalculator.
+      //
+      // OMP/Pi `actualCredits` is computed locally from our rate table —
+      // NOT from a `copilotUsageNanoAiu` returned by GitHub's backend. So
+      // for billability we re-classify by the model alone: a third-party
+      // coding agent that calls Claude through Copilot is billable; one
+      // that calls a local Ollama model is not. The explicit `billable`
+      // flag overrides the calculator's `actualCredits>0` heuristic for
+      // this case (issue #5).
       for (const [model, stats] of Object.entries(session.modelBreakdown)) {
         const grossInput = stats.input + stats.cacheRead + stats.cacheWrite;
         const usage = calculator.calculateCredits(model, grossInput, stats.output, stats.cacheRead, stats.cacheWrite);
+        const billable = classify(model, false);
         creditEntries.push({
           model,
           inputTokens: 0,
@@ -1105,9 +1185,12 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
           cachedTokens: 0,
           date,
           actualCredits: usage.totalCredits,
+          billable,
         });
-        if (session.source === "omp") { ompCredits += usage.totalCredits; }
-        else { piCredits += usage.totalCredits; }
+        if (billable) {
+          if (session.source === "omp") { ompCredits += usage.totalCredits; }
+          else { piCredits += usage.totalCredits; }
+        }
       }
     }
   }
@@ -1157,6 +1240,17 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
       .map(([day, credits]) => ({ day, credits: Math.round(credits * 100) / 100 }))
       .sort((a, b) => a.day.localeCompare(b.day)),
     config,
+    nonBillable: {
+      totalCredits: Math.round(summary.nonBillable.totalCredits * 100) / 100,
+      byModel: Array.from(summary.nonBillable.byModel.values()).map(m => ({
+        model: m.model,
+        tier: m.tier,
+        inputCredits: Math.round(m.inputCredits * 100) / 100,
+        outputCredits: Math.round(m.outputCredits * 100) / 100,
+        cachedCredits: Math.round(m.cachedCredits * 100) / 100,
+        totalCredits: Math.round(m.totalCredits * 100) / 100,
+      })).sort((a, b) => b.totalCredits - a.totalCredits),
+    },
     promo: {
       isPromoActive: promoInfo.isPromoActive,
       promoBudget: promoInfo.promoBudget,

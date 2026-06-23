@@ -853,6 +853,41 @@ function renderAIC(aic) {
     ? '<div style="margin-top:8px;padding:6px 10px;background:var(--border);border-radius:4px;font-size:10px;color:var(--muted)">⚠️ <strong>Estimate:</strong> Computed from published per-model rates. Does not include cache-write costs (~5-10% undercount for Anthropic models). Check GitHub billing for exact usage.</div>'
     : '';
 
+  // Non-billable models panel (issue #5)
+  // Surfaces local Ollama / LM Studio / BYOK / unrecognised model usage as
+  // informational rows so users can see capacity-planning numbers without
+  // those rows inflating the billed total above. Credits shown here are
+  // rate-table ESTIMATES of what the same traffic would cost on Copilot —
+  // NOT what the user will be charged.
+  let nonBillableHTML = '';
+  const nb = aic.nonBillable;
+  if (nb && nb.byModel && nb.byModel.length > 0) {
+    let nbRows = '';
+    nb.byModel.forEach(m => {
+      const tierBadge = m.tier === 'premium'
+        ? '<span class="mult-badge mult-high">premium</span>'
+        : m.tier === 'base'
+          ? '<span class="mult-badge mult-1">base</span>'
+          : '<span class="mult-badge">custom</span>';
+      nbRows += '<tr><td><span class="model-tag '+mc(m.model)+'">'+esc(m.model)+'</span> '+tierBadge+'</td>'
+        + '<td class="num">'+m.inputCredits.toFixed(2)+'</td>'
+        + '<td class="num">'+m.outputCredits.toFixed(2)+'</td>'
+        + '<td class="num cached">'+m.cachedCredits.toFixed(2)+'</td>'
+        + '<td class="num" style="color:var(--muted)">'+m.totalCredits.toFixed(2)+'</td></tr>';
+    });
+    nonBillableHTML = '<div style="margin-top:16px;padding-top:12px;border-top:1px dashed var(--border)">'
+      + '<div class="section-title" style="margin-bottom:6px">Non-billable models (informational)</div>'
+      + '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">'
+      + 'GitHub Copilot does <strong>not</strong> bill these models — they appear here only so you can see local Ollama, LM Studio, BYOK, or unrecognised model traffic. '
+      + 'Credit numbers below are <em>rate-table estimates</em> of what the equivalent Copilot traffic would cost, and are <strong>excluded from the billed total above</strong>. '
+      + 'Toggle <code>copilotUsage.aic.includeOnlyBilledModels</code> off to restore legacy behaviour.'
+      + '</div>'
+      + '<table><thead><tr><th>Model</th><th class="num">Input (est)</th><th class="num">Output (est)</th><th class="num">Cached (est)</th><th class="num">Total (est)</th></tr></thead><tbody>'
+      + nbRows
+      + '</tbody><tfoot><tr><td colspan="4" style="text-align:right;color:var(--muted)">Non-billable total (informational):</td><td class="num" style="color:var(--muted)"><strong>'+nb.totalCredits.toFixed(2)+'</strong></td></tr></tfoot></table>'
+      + '</div>';
+  }
+
   el.innerHTML = '<div class="table-card"><div class="section-head"><div class="section-title">AI Credits (AIC) — Usage-Based Billing'+promoTag+'</div><div class="section-subtitle">Cycle: '+esc(aic.billingCycleStart)+' to '+esc(aic.billingCycleEnd)+' • '+planLabel+' Plan</div></div>'
     + budgetBar
     + '<div class="stats-row">' + statsCards.map(c=>'<div class="stat-card"><div class="label">'+c.l+'</div><div class="value'+(c.c?' '+c.c:'')+'">'+c.v+'</div><div class="sub">'+c.s+'</div></div>').join('') + '</div>'
@@ -861,7 +896,9 @@ function renderAIC(aic) {
     + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px">'
     + '<div><div class="section-title" style="margin-bottom:8px">AI Credits by Model</div><table><thead><tr><th>Model</th><th class="num">Input</th><th class="num">Output</th><th class="num">Cached</th><th class="num">Total</th></tr></thead><tbody>'+modelRows+'</tbody></table></div>'
     + '<div>'+calendarHTML+'</div>'
-    + '</div></div>';
+    + '</div>'
+    + nonBillableHTML
+    + '</div>';
 }
 
 function renderAgentSessions(agent) {
