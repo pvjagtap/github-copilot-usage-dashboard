@@ -727,6 +727,12 @@ function updateStatusBar(): void {
   const dashData = buildData();
   const currentSessionAIC = dashData.liveOtel.sessionAIC;
   const lastRequestAIC = dashData.liveOtel.lastRequestAIC;
+  // `informationalAIC` is the sum of byModel rows the classifier marked
+  // non-billable (Ollama / BYOK / unknown). The status-bar tooltip uses it
+  // to render "(+X.XX informational excluded)" next to the session total
+  // so users can see WHY the headline AIC is below the per-model sum,
+  // instead of the silent drop-to-zero we shipped in v1.10.13.
+  const informationalAIC = dashData.liveOtel.informationalAIC ?? 0;
 
   // Build currentSession METADATA only (model / turns / prompt / output /
   // duration). The `aicCredits` field is filled from `currentSessionAIC`
@@ -802,6 +808,7 @@ function updateStatusBar(): void {
     totalSessions: scan?.canonicalSessions ?? 0,
     currentSessionAIC,
     lastRequestAIC,
+    informationalAIC,
     dailyLimit: computeAndPushDailyLimit(calculator),
     dollarPerCredit: aicConfig.overageCostPerCredit ?? 0.01,
   });

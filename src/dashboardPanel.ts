@@ -650,10 +650,17 @@ function renderOtel(live) {
     // 7.22-credit request rendered as 7.2.
     rows += '<tr><td><span class="model-tag '+mc(m.model)+'">'+esc(m.model)+'</span></td><td class="num">'+m.requests+'</td><td class="num">'+fmt(m.prompt)+'</td><td class="num">'+fmt(m.completion)+'</td><td class="num">'+fmt(m.traceCached)+'</td><td class="num">'+fmt(m.metricCached)+'</td><td class="num cached">'+fmt(m.cached)+'</td><td class="num orange">'+aic.toFixed(2)+'</td></tr>';
   });
+  // AIC (sess) sub-text: when the classifier excluded non-billable byModel
+  // rows (Ollama / BYOK / unknown), show their sum so the user can SEE the
+  // gap between the headline session total and the per-model table below
+  // instead of mysteriously dropping value (root cause of v1.10.13 user-
+  // visible "AIC SESS = 0.00 but rows show 70.96" bug).
+  const infoAic = +(live.informationalAIC || 0);
+  const sessSub = infoAic > 0 ? 'session total · +' + infoAic.toFixed(2) + ' informational' : 'session total';
   el.innerHTML = '<div class="table-card"><div class="section-head"><div class="section-title">Live OpenTelemetry</div><div class="section-subtitle">'+esc(sourceLabel)+' • Last event '+esc(ls)+'</div></div>'
     +'<div class="note">'+(live.source === 'debug-log' ? debugNote : 'Live OTLP export. Cached tokens prefer cumulative metric deltas when available.')+'</div>'
     +'<div class="stats-row">'
-    +[reqLabel+':'+live.requests+':last event '+esc(ls),'Live Prompt:'+fmt(live.prompt)+':from traces','Live Output:'+fmt(live.completion)+':from traces','Live Cached:'+fmt(live.cached)+':'+csub,'Trace Cache:'+fmt(live.traceCached)+':cache_read','Metric Cache:'+fmt(live.metricCached)+':token.usage','AIC (sess):'+((live.sessionAIC||0).toFixed(2))+':session total','AIC (last req):'+ ((live.lastRequestAIC||0).toFixed(2))+':last request']
+    +[reqLabel+':'+live.requests+':last event '+esc(ls),'Live Prompt:'+fmt(live.prompt)+':from traces','Live Output:'+fmt(live.completion)+':from traces','Live Cached:'+fmt(live.cached)+':'+csub,'Trace Cache:'+fmt(live.traceCached)+':cache_read','Metric Cache:'+fmt(live.metricCached)+':token.usage','AIC (sess):'+((live.sessionAIC||0).toFixed(2))+':'+sessSub,'AIC (last req):'+ ((live.lastRequestAIC||0).toFixed(2))+':last request']
       .map((s,i)=>{const p=s.split(':');return '<div class="stat-card"><div class="label">'+p[0]+'</div><div class="value'+(i===3?' cached':i>=6?' orange':'')+'">'+p[1]+'</div><div class="sub">'+p[2]+'</div></div>';}).join('')
     +'</div>'
     +'<div class="section-title" style="margin-top:8px">Live OTel by Model</div>'

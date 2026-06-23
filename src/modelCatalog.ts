@@ -209,16 +209,47 @@ export function getCachedCatalog(): ModelCatalog | null {
 }
 
 /**
+ * Test-only: replace the in-memory catalog snapshot. Lets unit tests
+ * exercise `classifyByCatalog()` without performing a real network refresh
+ * or hitting the VS Code globalState cache. Production code must not call
+ * this — use `loadCatalog()` instead.
+ */
+export function __setCatalogForTesting(snapshot: ModelCatalog | null): void {
+  cached = snapshot;
+}
+
+/**
  * Lookup helper used by the classifier. Returns `null` when the model is
  * not present in the catalog — callers should fall through to the existing
  * rate-table heuristic in that case.
  *
  * Precedence inside the catalog itself:
- *   1. User's `chatLanguageModels.json` says this id belongs to a non-Copilot
- *      vendor (Ollama, BYOK Anthropic key, LM Studio, …) → non-billable. This
- *      is treated as authoritative because the user themselves told VS Code
- *      where the model is served from.
- *   2. CAPI `/models` entry exists → use its billing flag.
+ *   1. CAPI `/models` entry exists with `billable: true` → BILLABLE.
+ *      CAPI is GitHub's authoritative per-plan billing source. If it says
+ *      a model id is billed on this plan, the presence of a BYOK alias
+ *      with the same id (e.g. user has both Copilot Business AND a BYOK
+ *      Anthropic key configured for `claude-opus-4.7`, or Copilot Chat
+ *      itself registers Anthropic-backed models via
+ *      `vscode.lm.selectChatModels()` with `vendor: "anthropic"`) is just
+ *      a name collision — the model id alone can't tell us which path the
+ *      request actually took, and the dashboard's traffic sources
+ *      (chatSession logs, OMP/Pi sessions, Copilot CLI ledger) are all
+ *      Copilot-routed by construction.
+ *   2. User's `chatLanguageModels.json` / `vscode.lm` registry says this id
+ *      belongs to a non-Copilot vendor → NON-BILLABLE. Only applied when
+ *      step 1 didn't already mark it billable (so genuine Ollama / BYOK-only
+ *      ids like `ollama/qwen2.5-coder:7b`, `local-llama-13b` still demote
+ *      correctly).
+ *   3. CAPI `/models` entry exists with `billable: false` → use that flag.
+ *      (E.g. preview / utility models GitHub doesn't bill.)
+ *
+ * Background: without this precedence, every OMP / Pi session reported 0.00
+ * AIC and the "non-billable" panel listed premium models like
+ * `claude-opus-4.7`, `claude-sonnet-4.6`, `gpt-5.4` even though they are
+ * GitHub-billed — because Copilot Chat's runtime registry surfaces its
+ * Anthropic-backed routed models with `vendor: "anthropic"` and that landed
+ * the same ids in `userVendorByModelId`, short-circuiting every traffic
+ * source that lacked an explicit `copilotUsageNanoAiu` to non-billable.
  */
 export function classifyByCatalog(modelName: string): ModelCatalogEntry | null {
   if (!cached) {
@@ -226,6 +257,16 @@ export function classifyByCatalog(modelName: string): ModelCatalogEntry | null {
   }
   const key = modelName.toLowerCase();
 
+  const capiEntry = cached.byId.get(key) ?? null;
+
+  // 1. CAPI says billable → trust CAPI, ignore the BYOK alias collision.
+  if (capiEntry && capiEntry.billable) {
+    return capiEntry;
+  }
+
+  // 2. No CAPI billable hit — fall back to the user/runtime third-party
+  //    signal. This is where genuine Ollama / LM Studio / BYOK-only ids
+  //    (which never appear in CAPI) correctly resolve to non-billable.
   const thirdPartyVendor = cached.userVendorByModelId.get(key);
   if (thirdPartyVendor) {
     return {
@@ -236,7 +277,8 @@ export function classifyByCatalog(modelName: string): ModelCatalogEntry | null {
     };
   }
 
-  return cached.byId.get(key) ?? null;
+  // 3. CAPI knows about it but billable=false (preview / utility).
+  return capiEntry;
 }
 
 /**

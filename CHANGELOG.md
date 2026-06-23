@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.14] - 2026-06-23
+
+### Fixed
+
+- **`AIC (SESS)` no longer drops to `0.00` when GitHub-billed models also have a BYOK alias** — the `dashboardData.ts` post-processor was passing a hardcoded `hasActualCredits=false` to `classifyModelBillability()` for every live OTel byModel row, so when a user's `chatLanguageModels.json` listed an id under a third-party vendor (e.g. Copilot Chat itself surfacing its Anthropic-backed routed models with `vendor: "anthropic"`, or a real BYOK Anthropic key for `claude-opus-4.7`), the classifier demoted the Copilot-billed row to non-billable and the headline session total was stripped to zero — even though the per-model table right below it kept showing real billed credits (e.g. screenshot reported `gpt-5.3-codex` = 12.07 AIC and `claude-opus-4.7` = 58.89 AIC summing to 70.96, but `AIC (SESS)` rendered as 0.00). Now every byModel row carries a `hasActualCredits` provenance flag (`true` iff at least one contributing request supplied a `copilotUsageNanoAiu` or `debugAicCredits` value) and the classifier uses it as the strong "GitHub already billed it" signal that overrides BYOK / third-party catalog demotions. Complements the `classifyByCatalog()` precedence fix in `src/modelCatalog.ts` (CAPI `billable: true` wins over BYOK alias) — either signal is sufficient to keep a billed row counted.
+- **Status bar tooltip always shows the session AIC line** — previously `if (data?.currentSessionAIC) { ... }` hid the `AI Credits (session total)` row whenever the value was exactly `0.00`, which made the demotion bug above invisible (users only saw `last request` and concluded the dashboard was broken). The line now renders unconditionally with `.toFixed(2)`, and when any byModel rows were classified informational the tooltip appends `(+X.XX informational excluded)` so the gap between the session total and the per-model table sum is explicit instead of mysterious.
+- **Dashboard `AIC (sess)` tile annotates informational exclusions** — mirrors the status-bar tooltip: when `liveOtel.informationalAIC > 0`, the tile's subtitle reads `session total · +X.XX informational` instead of just `session total`, so the discrepancy with the byModel table below is visible without reading the tooltip.
+
+### Added
+
+- **`tests/verify-byok-billable-regression.js`** — 7 assertions pinning the v1.10.14 behavior: simulates the user's screenshot scenario (`claude-opus-4.7` + `gpt-5.3-codex` with BYOK Anthropic in `chatLanguageModels.json`) and asserts `sessionAIC === 70.96` after reclassification (was `0.00` in v1.10.13). Also pins the inverse: `hasActualCredits=false` rows still get demoted by BYOK catalog, Ollama stays non-billable, and `excludeModels` still wins even over `hasActualCredits=true` (user's explicit override).
+- **`LiveOtelData.informationalAIC`** — new top-level field exposing the sum of `aicCredits` across byModel rows the classifier marked non-billable. Consumed by `dashboardPanel.ts` and `statusBar.ts` to render the "informational excluded" annotation. Internal-only data shape change — the wire format with downstream consumers is unchanged.
+
 ## [1.10.13] - 2026-06-23
 
 ### Added

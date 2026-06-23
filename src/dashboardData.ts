@@ -376,6 +376,18 @@ export interface LiveOtelData {
      */
     aicCredits: number;
     /**
+     * True iff at least one request contributing to this row's `aicCredits`
+     * came from GitHub's authoritative `copilotUsageNanoAiu` debug-log
+     * field (or `debugAicCredits`). This is the "GitHub actually billed it"
+     * signal — it MUST be passed to `classifyModelBillability` as
+     * `hasActualCredits` so a BYOK third-party catalog entry can't demote
+     * a Copilot-billed row to non-billable. Root cause of the v1.10.13
+     * sessionAIC=0 bug: hardcoding `false` here demoted Copilot-billed
+     * claude-opus-4.7 / gpt-5.3-codex to non-billable for users with BYOK
+     * Anthropic configured in `chatLanguageModels.json`.
+     */
+    hasActualCredits: boolean;
+    /**
      * Whether this model is billed by GitHub Copilot. False for local
      * Ollama / LM Studio / BYOK / unrecognised models. Non-billable rows
      * are excluded from `sessionAIC` / `lastRequestAIC` (issue #5).
@@ -386,6 +398,13 @@ export interface LiveOtelData {
   sessionAIC: number;
   /** Last single request's AIC credits */
   lastRequestAIC: number;
+  /**
+   * Σ `aicCredits` across `byModel` rows whose `isBillable === false`
+   * (after the post-processor reclassifies). Used by the dashboard tile
+   * + status-bar tooltip to surface "$X.XX informational excluded" so a
+   * session total < per-row sum is transparent rather than mysterious.
+   */
+  informationalAIC: number;
 }
 
 // ─── Aggregation ──────────────────────────────────────────────
@@ -656,6 +675,12 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
         : 0;
       const reconciledCredits = (exact ? exact.nanoAiu / 1e9 : 0) + (pending?.credits ?? 0);
       const credits = reconciledCredits > 0 ? reconciledCredits : fallbackEstimate;
+      // `hasActualCredits` is the "GitHub already billed it" signal — only
+      // true when the debug-log overlay populated `exact.nanoAiu > 0` for
+      // this row. `pending` credits are OTel rate-table estimates and do
+      // NOT qualify (marking them as actual would let an unknown-model
+      // estimate sneak past the billable filter).
+      const hasActualCredits = (exact?.nanoAiu ?? 0) > 0;
       return {
         model: live?.model ?? exact?.model ?? pending?.model ?? "unknown",
         requests: live?.requests ?? (exact?.calls ?? 0) + (pending?.requests ?? 0),
@@ -665,6 +690,7 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
         metricCached: live?.metricCached ?? 0,
         cached: live?.cached ?? (exact?.cached ?? 0) + (pending?.cached ?? 0),
         aicCredits: roundCredits(credits),
+        hasActualCredits,
         // Backfilled by the post-processor that runs after the if/else chain.
         isBillable: false,
       };
@@ -737,6 +763,7 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
       // honest UX; an impossible inversion is not.
       sessionAIC: Math.round(sessionAIC * 100) / 100,
       lastRequestAIC: Math.round(lastRequestAIC * 100) / 100,
+      informationalAIC: 0,
     };
   } else {
     // Debug-log-only fallback (no OTel data yet). Same activationTime scope
@@ -821,11 +848,16 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
         byModel: Array.from(byModelMap.values()).map(row => ({
           ...row,
           aicCredits: Math.round(row.aicCredits * 100) / 100,
+          // Every row here was built from `debugRequestsToday`, whose AIC
+          // value came from `req.nanoAiu` (GitHub's authoritative billed
+          // amount) — by construction every row has actual credits.
+          hasActualCredits: true,
           // Backfilled by the post-processor below.
           isBillable: false,
         })),
         sessionAIC: Math.round(sessionAIC * 100) / 100,
         lastRequestAIC: Math.round(((mostRecentRequest?.nanoAiu ?? 0) / 1e9) * 100) / 100,
+        informationalAIC: 0,
       };
     } else if (debugTurnsToday.length > 0) {
       // Per-model accumulator. `aicCredits` is summed from the per-llm_request
@@ -843,6 +875,16 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
           metricCached: number;
           cached: number;
           aicCredits: number;
+          /**
+           * True iff at least one llm_request contributing to this row
+           * supplied an authoritative billed value (`mt.nanoAiu > 0` or
+           * `turn.debugAicCredits > 0`). Mixed rows where SOME requests
+           * billed and SOME didn't still count as `true` — the post-
+           * processor uses it as a strong signal that GitHub already
+           * counted this model, so a third-party catalog entry must not
+           * silently demote it (root cause of v1.10.13 sessionAIC=0 bug).
+           */
+          hasActualCredits: boolean;
         }
       >();
       const getOrCreateRow = (model: string) => {
@@ -857,6 +899,7 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
             metricCached: 0,
             cached: 0,
             aicCredits: 0,
+            hasActualCredits: false,
           };
           byModelMap.set(model, row);
         }
@@ -899,6 +942,7 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
             // older debug-logs lack per-model AIU.
             if (typeof mt.nanoAiu === "number" && mt.nanoAiu > 0) {
               row.aicCredits += mt.nanoAiu / 1e9;
+              row.hasActualCredits = true;
             } else {
               const usage = calculator.calculateCredits(model, mt.prompt, mt.output, mt.cached);
               row.aicCredits += usage.totalCredits;
@@ -915,6 +959,7 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
           row.cached += turnCached;
           if (turn.debugAicCredits > 0) {
             row.aicCredits += turn.debugAicCredits;
+            row.hasActualCredits = true;
           } else {
             const usage = calculator.calculateCredits(
               turn.modelFamily || "unknown",
@@ -983,15 +1028,30 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
         byModel: Array.from(byModelMap.values()).map(row => ({
           ...row,
           aicCredits: Math.round(row.aicCredits * 100) / 100,
+          // `hasActualCredits` is carried through by the spread above.
           // Backfilled by the post-processor below.
           isBillable: false,
         })),
         // No ratchet — see OTel branch above for rationale.
         sessionAIC: Math.round(sessionAIC * 100) / 100,
         lastRequestAIC: Math.round(lastRequestAIC * 100) / 100,
+        informationalAIC: 0,
       };
     } else {
-      liveOtel = { requests: 0, prompt: 0, completion: 0, cached: 0, traceCached: 0, metricCached: 0, lastSeen: "", source: "none", byModel: [], sessionAIC: 0, lastRequestAIC: 0 };
+      liveOtel = {
+        requests: 0,
+        prompt: 0,
+        completion: 0,
+        cached: 0,
+        traceCached: 0,
+        metricCached: 0,
+        lastSeen: "",
+        source: "none",
+        byModel: [],
+        sessionAIC: 0,
+        lastRequestAIC: 0,
+        informationalAIC: 0,
+      };
     }
   }
 
@@ -1005,17 +1065,29 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
   // useful debugging signal.
   liveOtel.byModel = liveOtel.byModel.map(row => ({
     ...row,
-    // For display classification we rely on the model identity alone — we
-    // can't trust `row.aicCredits > 0` as a "GitHub billed it" signal here
-    // because the OTel branch may have populated it from rate estimates.
-    isBillable: classifyModelBillability(calculator, config, row.model, false, classifyByCatalog),
+    // CRITICAL: pass `row.hasActualCredits` (NOT a hardcoded `false`) so the
+    // classifier's rule #2 (hasActualCredits=true → billable) overrides any
+    // BYOK / third-party catalog entry the user happens to have in their
+    // `chatLanguageModels.json`. Root cause of v1.10.13 bug: hardcoding
+    // `false` here demoted Copilot-billed claude-opus-4.7 / gpt-5.3-codex
+    // to non-billable for users with BYOK Anthropic configured, dropping
+    // `sessionAIC` to 0.00 while individual byModel rows still showed real
+    // billed credits. `excludeModels` still wins (user explicit override).
+    isBillable: classifyModelBillability(calculator, config, row.model, row.hasActualCredits, classifyByCatalog),
   }));
+  // Always recompute the surface AIC values so the dashboard tile + status
+  // bar tooltip stay in sync with the byModel classification. When the
+  // master switch is off, every row counts as billable (legacy behaviour).
+  const billableSession = liveOtel.byModel
+    .filter(r => r.isBillable)
+    .reduce((s, r) => s + r.aicCredits, 0);
+  const informationalSession = liveOtel.byModel
+    .filter(r => !r.isBillable)
+    .reduce((s, r) => s + r.aicCredits, 0);
   if (config.includeOnlyBilledModels !== false) {
-    const billableSession = liveOtel.byModel
-      .filter(r => r.isBillable)
-      .reduce((s, r) => s + r.aicCredits, 0);
     liveOtel.sessionAIC = Math.round(billableSession * 100) / 100;
   }
+  liveOtel.informationalAIC = Math.round(informationalSession * 100) / 100;
 
   // Limit turnsAll to most recent 500 to keep webview payload small
   const sortedTurns = scan.turns

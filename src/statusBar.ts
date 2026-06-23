@@ -38,10 +38,19 @@ export interface StatusBarData {
   currentSession: CurrentSessionInfo | null;
   /** Total sessions in scan (for tooltip context) */
   totalSessions: number;
-  /** Current session AIC credits (cumulative) */
+  /** Current session AIC credits (cumulative, billable scope) */
   currentSessionAIC: number;
   /** Last single request's AIC credits */
   lastRequestAIC: number;
+  /**
+   * Sum of `aicCredits` across live byModel rows classified as NON-billable
+   * (Ollama / BYOK / unknown). Surfaced in the tooltip as
+   * "$X.XX informational excluded" so users can SEE why the headline
+   * session AIC is lower than the per-model table sum, instead of
+   * silently dropping to 0. Optional for backward compatibility with the
+   * legacy `update(stats)` entry point.
+   */
+  informationalAIC?: number;
   /** Daily-limit overlay state (optional — undefined = no limit feature active) */
   dailyLimit?: {
     stage: "none" | "warn" | "brace" | "limit";
@@ -90,6 +99,7 @@ export class StatusBarProvider {
       totalSessions: 0,
       currentSessionAIC: 0,
       lastRequestAIC: 0,
+      informationalAIC: 0,
     });
   }
 
@@ -206,12 +216,18 @@ export class StatusBarProvider {
         `  Duration: ${cs.durationMin}m`
       );
     }
-    if (data?.currentSessionAIC) {
-      lines.push(`  AI Credits (session total): ${data.currentSessionAIC.toFixed(2)}`);
-    }
-    if (data?.lastRequestAIC) {
-      lines.push(`  AI Credits (last request): ${data.lastRequestAIC.toFixed(2)}`);
-    }
+    // Always emit BOTH AIC lines, even at 0.00, so users can see whether the
+    // dashboard is reading their session at all. Pre-v1.10.14 the truthy check
+    // hid `currentSessionAIC` when it was 0, which made the BYOK demotion bug
+    // (sessionAIC dropped to 0 by classifier) look like "no data" — confusing
+    // since the per-model table still showed real billed credits. Now the line
+    // is always there, and if any AIC was excluded as informational we surface
+    // it on the same line so the discrepancy is visible at a glance.
+    const sessAic = data?.currentSessionAIC ?? 0;
+    const infoAic = data?.informationalAIC ?? 0;
+    const sessSuffix = infoAic > 0 ? `  (+${infoAic.toFixed(2)} informational excluded)` : "";
+    lines.push(`  AI Credits (session total): ${sessAic.toFixed(2)}${sessSuffix}`);
+    lines.push(`  AI Credits (last request): ${(data?.lastRequestAIC ?? 0).toFixed(2)}`);
     if (otel && otel.requests > 0 && cs) {
       lines.push("", `Session: ${cs.sessionShort}… | Model: ${cs.model} | Turns: ${cs.turns}`);
     } else {

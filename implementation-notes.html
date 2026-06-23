@@ -504,5 +504,233 @@ C.12), and per-session results agree with
   <code>diagnose-copilot-cli.mjs</code> algorithm.</li>
 </ul>
 
+<hr>
+
+<h1>v1.10.14 &mdash; <code>AIC (SESS)</code> dropped to <code>0.00</code> for GitHub-billed models with BYOK alias collision</h1>
+
+<p><strong>User report (verbatim):</strong></p>
+<blockquote>
+why in the world i am seeing the 0.00 AIC Session all the time &mdash; <em>and later:</em>
+why the heck we are dropping to zero when we should not and should show
+accurate information / do the code diff since release before yesterday
+and current code changes and fix all the issues
+</blockquote>
+
+<p><strong>Symptom:</strong> Dashboard sidebar showed <code>AIC (LAST REQ) = 3.98</code>
+and <code>AIC (SESS) = 0.00</code>, while the <em>Live OTel by Model</em>
+table directly below it listed <code>gpt-5.3-codex: 12.07 AIC</code> and
+<code>claude-opus-4.7: 58.89 AIC</code> (summing to 70.96). Status-bar
+tooltip omitted the session line entirely so users could not see what
+was happening.</p>
+
+<h2>Root cause &mdash; two compounding bugs in the v1.10.13 release</h2>
+
+<ol>
+  <li><strong>Hardcoded <code>hasActualCredits=false</code> in the
+  classifier call</strong> (<code>src/dashboardData.ts</code> post-processor):
+  <pre>isBillable: classifyModelBillability(calculator, config, row.model, <span class="bad">false</span>, classifyByCatalog),</pre>
+  The classifier's precedence has a rule #2: <em>"if the row already has
+  authoritative GitHub-billed credits, it's billable"</em>. Hardcoding
+  <code>false</code> meant the rule never fired, so classification fell
+  through to the catalog lookup. When the user's
+  <code>chatLanguageModels.json</code> listed the same id under a non-Copilot
+  vendor (Copilot Chat itself surfaces Anthropic-backed routed models with
+  <code>vendor: "anthropic"</code>; users with real BYOK Anthropic keys
+  trigger the same map), <code>classifyByCatalog()</code> demoted the row
+  to non-billable and the post-processor's filter stripped
+  <code>sessionAIC</code> to zero. The per-model table still rendered the
+  real billed <code>aicCredits</code> values because the table's row
+  <code>aicCredits</code> field is set <em>upstream</em> from authoritative
+  <code>copilotUsageNanoAiu</code> data &mdash; only the post-processor's
+  reclassification + filter was broken.</li>
+
+  <li><strong>Status-bar tooltip hid the session line at <code>0.00</code></strong>
+  (<code>src/statusBar.ts</code> line 209):
+  <pre>if (data?.currentSessionAIC) { lines.push(...) }  // <span class="bad">truthy check, omits 0.00</span></pre>
+  Made the demotion bug above invisible. Users only saw
+  <code>last request</code> and concluded the dashboard was broken.</li>
+</ol>
+
+<h2>Fix &mdash; pass evidence-based provenance instead of a hardcoded literal</h2>
+
+<table>
+  <tr><th>Layer</th><th>Change</th></tr>
+  <tr>
+    <td><code>LiveOtelData.byModel[]</code> type</td>
+    <td>New required field <code>hasActualCredits: boolean</code> &mdash;
+    <code>true</code> iff at least one request contributing to the row's
+    <code>aicCredits</code> supplied an authoritative
+    <code>copilotUsageNanoAiu</code> or <code>debugAicCredits</code> value.</td>
+  </tr>
+  <tr>
+    <td>OTel + debug-overlay branch</td>
+    <td><code>hasActualCredits = (exact?.nanoAiu ?? 0) &gt; 0</code>.
+    Pending OTel-only rate-table estimates do NOT qualify &mdash; that would
+    let unknown-model estimates sneak past the filter and reintroduce the
+    issue #5 BYOK leakage.</td>
+  </tr>
+  <tr>
+    <td>Debug-only requests branch</td>
+    <td>Every row in this branch comes from
+    <code>debugRequestsToday[i].nanoAiu / 1e9</code> &mdash; all
+    authoritative by construction, so the row map sets
+    <code>hasActualCredits: true</code> unconditionally.</td>
+  </tr>
+  <tr>
+    <td>Debug-only turns branch</td>
+    <td>Per-row accumulator: set <code>row.hasActualCredits = true</code>
+    when <code>mt.nanoAiu &gt; 0</code> or <code>turn.debugAicCredits &gt; 0</code>
+    contributed. Mixed rows (some billed, some rate-table fallback) count
+    as <code>true</code>; the classifier treats it as the strong "GitHub
+    already counted this model" signal.</td>
+  </tr>
+  <tr>
+    <td>Post-processor classifier call</td>
+    <td><code>row.hasActualCredits</code> replaces the hardcoded
+    <code>false</code>. Now: GitHub-billed Copilot rows survive even when the
+    user has a BYOK alias for the same id; genuine local Ollama / LM Studio
+    rows still demote (they never produce a <code>copilotUsageNanoAiu</code>);
+    <code>excludeModels</code> still wins (user explicit override).</td>
+  </tr>
+  <tr>
+    <td><code>LiveOtelData.informationalAIC</code></td>
+    <td>New field exposing &Sigma; <code>aicCredits</code> across rows the
+    classifier marked non-billable. Consumed by both the dashboard tile and
+    the status-bar tooltip so the gap between the session total and the
+    per-model table sum is explicit instead of mysterious.</td>
+  </tr>
+  <tr>
+    <td>Status-bar tooltip</td>
+    <td>Always emits both AIC lines (session + last request) with
+    <code>.toFixed(2)</code>. When <code>informationalAIC &gt; 0</code>,
+    appends <code>(+X.XX informational excluded)</code> to the session
+    line.</td>
+  </tr>
+  <tr>
+    <td>Dashboard <code>AIC (sess)</code> tile</td>
+    <td>Subtitle reads <code>session total &middot; +X.XX informational</code>
+    when <code>informationalAIC &gt; 0</code>, else just
+    <code>session total</code>.</td>
+  </tr>
+</table>
+
+<h2>Relationship to the <code>classifyByCatalog()</code> precedence fix</h2>
+
+<p>A prior session added a complementary fix in <code>src/modelCatalog.ts</code>
+that makes CAPI <code>billable: true</code> override the BYOK alias inside
+the catalog lookup itself (precedence rule #1 promoted, BYOK demoted to
+rule #2, CAPI <code>billable: false</code> kept at rule #3). The two fixes
+are belt-and-suspenders:</p>
+
+<ul>
+  <li><strong>Catalog fix:</strong> if CAPI knows the model id is billed on
+  this plan, the catalog returns billable=true and the BYOK alias is
+  ignored. Works even when there's no debug-log evidence (e.g. an OMP/Pi
+  session that wasn't routed through GitHub's debug-log producer).</li>
+  <li><strong><code>hasActualCredits</code> fix (this release):</strong> if
+  any contributing request carried a GitHub-billed
+  <code>copilotUsageNanoAiu</code>, that is direct evidence the row is
+  Copilot-billed &mdash; overrides catalog regardless of CAPI's coverage
+  (handles preview models like <code>gpt-5.3-codex</code> that may not yet
+  be in CAPI's <code>/models</code> response).</li>
+</ul>
+
+<p>Either signal alone is sufficient to keep the row counted. Both must
+return non-billable for the row to be filtered out, which is the right
+contract for the user's "I have BYOK plus Copilot" mixed environment.</p>
+
+<h2>Design decisions / deviations from naive fix</h2>
+
+<table>
+  <tr><th>Decision</th><th>Rationale</th></tr>
+  <tr>
+    <td>Track <code>hasActualCredits</code> per row, not as a global flag.</td>
+    <td>The user can have some models billed by GitHub and other models
+    served locally in the same session. A global flag would either let
+    Ollama leak into billable (reintroducing issue #5) or strip legitimate
+    GitHub-billed credits.</td>
+  </tr>
+  <tr>
+    <td>Set <code>hasActualCredits=false</code> for pending OTel-only
+    estimates even though their <code>aicCredits</code> &gt; 0.</td>
+    <td>Pending values are rate-table extrapolations, not GitHub's billed
+    amount. Marking them as actual would defeat the safety contract: the
+    classifier is supposed to use <code>hasActualCredits</code> as
+    <em>evidence</em>, not as a "this row has a non-zero credit number" check.</td>
+  </tr>
+  <tr>
+    <td>Always recompute <code>sessionAIC</code> in the post-processor,
+    not just when <code>includeOnlyBilledModels</code> is on.</td>
+    <td>Previously the recompute was gated. When the master switch was off,
+    <code>sessionAIC</code> kept its branch-local value, which could
+    disagree with the per-model table sum if any branch's row math drifted.
+    Now the post-processor is authoritative either way (and falls back to
+    counting all rows when the switch is off, which is the legacy
+    behaviour).</td>
+  </tr>
+  <tr>
+    <td>Did NOT touch <code>lastRequestAIC</code> filtering.</td>
+    <td>Existing intentional behaviour: that field shows the LATEST request
+    even if it's classified non-billable, so users debugging a tool-heavy
+    turn can always see what just happened. Comment in the source code
+    explicitly calls this out.</td>
+  </tr>
+  <tr>
+    <td>Surface <code>informationalAIC</code> in both the tile subtitle
+    and the tooltip, not just one.</td>
+    <td>The tile is glanceable but small; the tooltip is detailed but
+    hidden behind a hover. Putting the info in both places handles both
+    user paths.</td>
+  </tr>
+</table>
+
+<h2>Open questions / things worth confirming</h2>
+
+<ol>
+  <li>The user's screenshot showed <code>claude-opus-4.7</code> as the
+  high-credit row. Confirm that <code>chatLanguageModels.json</code> on
+  the user's machine actually maps this id under a non-Copilot vendor
+  (likely yes, since Copilot Chat surfaces its Anthropic-backed models
+  via <code>vendor: "anthropic"</code>). If not, the BYOK fix path
+  doesn't apply and the demotion was caused by something else &mdash; in
+  that case the test in
+  <code>tests/verify-byok-billable-regression.js</code> still pins the
+  classifier behavior but the root-cause attribution would need
+  re-investigation.</li>
+  <li>If the user runs with <code>copilotUsage.useOnlineModelCatalog</code>
+  off, only the <code>hasActualCredits</code> path protects them. Worth
+  confirming the setting default is <code>true</code> in their config.</li>
+  <li>Pre-existing test <code>tests/verify-dashboard-vs-api.js</code> has
+  one failing assertion comparing <code>liveOtel.sessionAIC</code> against
+  the day's grand total. This is an unrelated structural mismatch (the
+  dashboard scopes <code>sessionAIC</code> to <code>activationTime</code>
+  while the test sums all of today). My fix moves the dashboard
+  <em>closer</em> to truth (the gap was wider before, since the
+  ~70.96 credits being incorrectly stripped are now correctly included).
+  The remaining gap is the intentional instance-scoping. Worth either
+  fixing the test's truth-set to also apply <code>activationTime</code>
+  or removing that specific assertion in a follow-up.</li>
+</ol>
+
+<h2>Files changed</h2>
+
+<ul>
+  <li><code>src/dashboardData.ts</code> &mdash; <code>LiveOtelData</code>
+  type, all three byModel-construction branches, post-processor.</li>
+  <li><code>src/statusBar.ts</code> &mdash; <code>StatusBarData</code> type,
+  tooltip rendering.</li>
+  <li><code>src/extension.ts</code> &mdash; plumbs
+  <code>informationalAIC</code> from <code>dashData.liveOtel</code> to
+  <code>statusBar.updateStatus()</code>.</li>
+  <li><code>src/dashboardPanel.ts</code> &mdash; <code>AIC (sess)</code>
+  tile subtitle.</li>
+  <li><code>CHANGELOG.md</code>, <code>package.json</code> &mdash; release
+  bookkeeping.</li>
+  <li><code>tests/verify-byok-billable-regression.js</code> &mdash; new,
+  7 assertions including end-to-end shape check that reproduces the
+  user's screenshot scenario (asserts <code>sessionAIC = 70.96</code>,
+  not <code>0.00</code>).</li>
+</ul>
+
 </body>
 </html>
