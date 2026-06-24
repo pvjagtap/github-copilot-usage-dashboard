@@ -15,7 +15,9 @@
  *     • session.model_change                 → data.newModel       (UI hint)
  *     • user.message                         → data.content        (skip slash commands)
  *     • assistant.message                    → data.model + data.outputTokens   (TRUTH for attribution)
- *     • session.shutdown                     → data.modelMetrics.{model}.requests.cost   (TRUTH for AIC)
+ *     • session.shutdown                     → data.modelMetrics.{model}.totalNanoAiu    (TRUTH for AIC)
+ *                                            → data.totalNanoAiu as session-level fallback
+ *                                            → data.modelMetrics.{model}.requests.cost as legacy fallback
  *                                            + data.modelMetrics.{model}.usage.{inputTokens, outputTokens,
  *                                                  cacheReadTokens, cacheWriteTokens, reasoningTokens}
  *
@@ -26,6 +28,9 @@
  *        Ledger-only would have lost 41% of true AIC. We always compute a
  *        LIVE estimate (prompts × multiplier) and only override with the
  *        ledger value when present.
+ *        When shutdown is present, `totalNanoAiu` is the actual API-billed
+ *        amount; `requests.cost` is a coarse request/premium-request counter
+ *        and is only kept as a compatibility fallback for older CLI logs.
  *
  *     2. `selectedModel` ≠ actual billed model. Two sampled sessions
  *        displayed `claude-haiku-4-5` to the user but the ledger shows
@@ -54,9 +59,9 @@
  *
  *   Token-vs-prompt billing model:
  *     GHC CLI bills per *prompt* with a model multiplier, not per token.
- *     `session.shutdown.data.modelMetrics.{m}.requests.cost` is the
- *     authoritative AIC value (multiplier already applied). For live
- *     segments we replicate the same formula:
+ *     `session.shutdown.data.modelMetrics.{m}.totalNanoAiu` is the
+ *     authoritative API-billed AIC value. For live segments that have not
+ *     emitted shutdown yet, we use the request multiplier estimate:
  *
  *       AIC_live(model) = count(billable user.message attributed to model)
  *                         × multiplier(model)
@@ -86,8 +91,10 @@ import { classifyByCatalog } from "./modelCatalog";
  *    events attributed to this model. Always available, used for the
  *    token-volume display in the dashboard.
  *  • `ledgerAic` / `ledgerInputTokens` / …  — populated only from
- *    `session.shutdown.data.modelMetrics.{model}.*`. `undefined` when the
- *    session never emitted a shutdown event (crash, Ctrl-C, still-open).
+ *    `session.shutdown.data.modelMetrics.{model}.totalNanoAiu` + usage.
+ *    `undefined` when the session never emitted a shutdown event
+ *    (crash, Ctrl-C, still-open). Older logs without `totalNanoAiu` fall
+ *    back to `requests.cost`.
  *  • `apiCallCount` — `session.shutdown.data.modelMetrics.{m}.requests.count`,
  *    the per-model count of API roundtrips (includes tool-cycle continuations,
  *    so always ≥ `livePrompts`). `undefined` when no ledger.
@@ -229,8 +236,10 @@ function multiplierFor(model: string): number {
     return 1;
   }
   const cat = classifyByCatalog(model);
-  if (cat && typeof cat.multiplier === "number") {
-    // multiplier === 0 means GitHub doesn't bill this model — respect that.
+  if (cat && typeof cat.multiplier === "number" && cat.multiplier > 0) {
+    // GitHub Copilot CLI traffic is GitHub-routed by construction. Use a
+    // positive CAPI/catalog multiplier when available, but never let a
+    // user-config/BYOK non-billable alias demote CLI prompts to 0 AIC.
     return cat.multiplier;
   }
   const key = normalizeModelKey(model);
@@ -241,6 +250,9 @@ function multiplierFor(model: string): number {
   const family = key.replace(/-\d{4}[-.]?\d{2}[-.]?\d{2}$/, "").replace(/\.\d+$/, "");
   if (family !== key && family in FALLBACK_MULTIPLIERS) {
     return FALLBACK_MULTIPLIERS[family];
+  }
+  if (cat && typeof cat.multiplier === "number") {
+    return cat.multiplier;
   }
   return 1;
 }
@@ -295,6 +307,10 @@ function parseTimestamp(raw: unknown): number {
     return Number.isFinite(n) ? n : 0;
   }
   return 0;
+}
+
+function nanoAiuToCredits(raw: unknown): number {
+  return typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw / 1_000_000_000 : 0;
 }
 
 function parseSessionContent(
@@ -411,9 +427,11 @@ function parseSessionContent(
       case "session.shutdown": {
         shutdownCount++;
         hasLedger = true;
+        const sessionNanoAic = nanoAiuToCredits(data["totalNanoAiu"]);
         const metrics = isObj(data["modelMetrics"])
           ? (data["modelMetrics"] as Record<string, unknown>)
           : {};
+        let modelLedgerAicTotal = 0;
         for (const [modelId, raw] of Object.entries(metrics)) {
           if (!isObj(raw)) {
             continue;
@@ -421,9 +439,12 @@ function parseSessionContent(
           const entry = ensureModelEntry(byModel, modelId);
           const reqs = isObj(raw["requests"]) ? (raw["requests"] as Record<string, unknown>) : {};
           const usage = isObj(raw["usage"]) ? (raw["usage"] as Record<string, unknown>) : {};
-          const cost = typeof reqs["cost"] === "number" ? (reqs["cost"] as number) : 0;
+          const nanoAic = nanoAiuToCredits(raw["totalNanoAiu"]);
+          const legacyCost = typeof reqs["cost"] === "number" ? (reqs["cost"] as number) : 0;
+          const aic = nanoAic > 0 ? nanoAic : legacyCost;
           const cnt = typeof reqs["count"] === "number" ? (reqs["count"] as number) : 0;
-          entry.ledgerAic = (entry.ledgerAic ?? 0) + cost;
+          entry.ledgerAic = (entry.ledgerAic ?? 0) + aic;
+          modelLedgerAicTotal += aic;
           entry.apiCallCount = (entry.apiCallCount ?? 0) + cnt;
           const inT = typeof usage["inputTokens"] === "number" ? (usage["inputTokens"] as number) : 0;
           const outT = typeof usage["outputTokens"] === "number" ? (usage["outputTokens"] as number) : 0;
@@ -435,6 +456,13 @@ function parseSessionContent(
           entry.ledgerCacheReadTokens = (entry.ledgerCacheReadTokens ?? 0) + crT;
           entry.ledgerCacheWriteTokens = (entry.ledgerCacheWriteTokens ?? 0) + cwT;
           entry.ledgerReasoningTokens = (entry.ledgerReasoningTokens ?? 0) + rsT;
+        }
+        if (sessionNanoAic > 0 && modelLedgerAicTotal === 0) {
+          const currentModel = typeof data["currentModel"] === "string" && data["currentModel"]
+            ? (data["currentModel"] as string)
+            : lastAssistantModel || uiSelectedModel || "unknown";
+          const entry = ensureModelEntry(byModel, currentModel);
+          entry.ledgerAic = (entry.ledgerAic ?? 0) + sessionNanoAic;
         }
         break;
       }
@@ -464,10 +492,11 @@ function parseSessionContent(
     primaryModel = lastAssistantModel || uiSelectedModel || "unknown";
   }
 
-  // Per-model totalAic: ledger when present (authoritative), live otherwise.
+  // Per-model totalAic: shutdown totalNanoAiu ledger when present
+  // (authoritative), live otherwise.
   //
   // Semantics: when a session has a session.shutdown ledger, the per-model
-  // `requests.cost` field is treated as authoritative for THAT model only.
+  // `totalNanoAiu` field is treated as authoritative for THAT model only.
   // A model that shows live prompts but does NOT appear in the ledger
   // (e.g. user selected haiku, CLI silently re-routed to sonnet —
   // observed in 2/8 audited sessions) keeps its live estimate. This is

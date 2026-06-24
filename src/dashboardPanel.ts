@@ -158,6 +158,10 @@ h1 { font-size: 22px; margin-bottom: 4px; display: flex; align-items: center; ga
 table { width: 100%; border-collapse: collapse; }
 th { text-align: left; font-size: 10px; text-transform: uppercase; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--border); }
 td { padding: 8px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.source-usage table th { font-size: 11px; padding: 8px 10px; }
+.source-usage table td { font-size: 13px; padding: 10px; }
+.source-usage .section-title { font-size: 14px; }
+.source-usage .section-subtitle { font-size: 12px; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 .model-tag { font-size: 11px; padding: 2px 6px; border-radius: 4px; font-weight: 500; display: inline-block; }
 .model-opus { background: var(--model-opus-bg); color: var(--model-opus-fg); border: 1px solid var(--model-opus-border); }
@@ -914,6 +918,9 @@ function renderAgentSessions(agent) {
 
   // fmt helpers — inline since they're one-off and used only here
   const fmtAIC = v => (+v).toFixed(2);
+  const cliDisplayCredits = (agent.cliTotalCredits && agent.cliTotalCredits > 0)
+    ? agent.cliTotalCredits
+    : (agent.cliLlmCalls && agent.cliLlmCalls > 0 ? agent.cliLlmCalls : 0);
   const hasAgentData = agent.ompSessions > 0 || agent.piSessions > 0 || agent.cliSessions > 0;
   const agentNote = hasAgentData
     ? ''
@@ -993,11 +1000,11 @@ function renderAgentSessions(agent) {
       '<td class="num orange">'+fmtAIC(agent.vscodeAicCredits||0)+'</td>' +
       '<td class="num orange">'+fmtAIC(agent.ompTotalCredits||0)+'</td>' +
       '<td class="num orange">'+fmtAIC(agent.piTotalCredits||0)+'</td>' +
-      '<td class="num orange" title="Ledger when present (session.shutdown.cost), else prompts × multiplier">'+fmtAIC(agent.cliTotalCredits||0)+'</td>' +
+      '<td class="num orange" title="API-billed totalNanoAiu from session.shutdown when present, else prompts × multiplier while live">'+fmtAIC(cliDisplayCredits)+'</td>' +
       '<td class="num orange"><strong>'+totalAIC+'</strong></td>' +
     '</tr>';
 
-  el.innerHTML = '<div class="table-card"><div class="section-head">'
+  el.innerHTML = '<div class="table-card source-usage"><div class="section-head">'
     + '<div class="section-title">Usage by Source'
     +   ' ' + srcBadge('VS Code','#0078d4')
     +   ' ' + srcBadge('OMP','#7c3aed')

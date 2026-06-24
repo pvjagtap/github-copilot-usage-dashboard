@@ -353,10 +353,16 @@ export class AICCalculator {
 
   /**
    * Find the best matching cost rate for a model name.
-   * Uses substring matching for flexibility with normalization:
+  * Uses one-way substring matching for flexibility with normalization:
    * OTel reports model names with hyphens (e.g., "claude-opus-4-6") while the
    * rate table uses dots (e.g., "claude-opus-4.6"). We normalize version
    * separators before matching.
+  *
+  * The observed model name may include a suffix or provider namespace around
+  * a known rate-table id (for example "gpt-4o-mini-2024-07-18"), but a short
+  * observed id must not match a longer rate-table id. Otherwise local/BYOK
+  * aliases like "gpt-4" or "claude" are incorrectly treated as GitHub
+  * Copilot-billable models.
    */
   findModelRate(modelName: string): ModelCostRate | null {
     const lower = modelName.toLowerCase();
@@ -380,11 +386,6 @@ export class AICCalculator {
       if ((normalized.includes(key) || lower.includes(key)) && key.length > bestLen) {
         bestMatch = rate;
         bestLen = key.length;
-      }
-      // Also check if the key includes the input (for short model names)
-      if ((key.includes(normalized) || key.includes(lower)) && normalized.length > bestLen) {
-        bestMatch = rate;
-        bestLen = normalized.length;
       }
     }
 
@@ -529,7 +530,7 @@ export class AICCalculator {
             outputCredits: estimate.outputCredits * scale,
             cachedCredits: estimate.cachedCredits * scale,
             totalCredits: entry.actualCredits,
-            model: entry.model,
+            model: entry.billable === false ? entry.model : rate?.model ?? entry.model,
             tier: rate?.tier ?? "premium",
           };
         } else {
@@ -540,7 +541,7 @@ export class AICCalculator {
             outputCredits: 0,
             cachedCredits: 0,
             totalCredits: entry.actualCredits,
-            model: entry.model,
+            model: entry.billable === false ? entry.model : rate?.model ?? entry.model,
             tier: rate?.tier ?? "premium",
           };
         }
@@ -788,12 +789,24 @@ export function createCalculatorFromConfig(config: AICConfig): AICCalculator {
  *   2. `hasActualCredits === true`      — GitHub's backend already billed it → billable.
  *   3. `config.extraBilledModels`       — substring match → billable.
  *   4. `config.includeOnlyBilledModels === false` → everything else billable.
- *   5. Online catalog lookup            — if the model id is present in the
- *      authoritative GitHub model catalog (see `modelCatalog.ts`), use its
- *      `billable` flag directly. This catches new GA / preview models the
- *      built-in rate table has not yet been updated for, and conversely
- *      marks CDN-listed BYOK model IDs as non-billable.
- *   6. `calculator.isKnownGHCModel(model)` → billable.
+ *   5. Local GitHub model table         — known Copilot model ids are billable.
+ *      This intentionally runs before third-party/user-config demotions so
+ *      GitHub model names do not appear in the non-billable panel just because
+ *      the same id is also registered by a BYOK provider.
+ *   6. Online catalog lookup            — if the model id is present in the
+ *      authoritative GitHub model catalog (see `modelCatalog.ts`):
+ *        • CAPI verdict (source: "capi") is always honoured — GitHub's
+ *          per-plan `/models` response is authoritative.
+ *        • user-config / BYOK-alias verdict (source: "user-config") is
+ *          ONLY honoured when the model is NOT in the local rate table.
+ *          Rationale: a user can have `claude-opus-4.7` listed under a
+ *          BYOK Anthropic vendor in `chatLanguageModels.json` AND still
+ *          have all their dashboard traffic for that id come through
+ *          Copilot's billable channel — the alias collision must not
+ *          silently demote OMP / Pi / CLI / older OTel rows that lack
+ *          an explicit `copilotUsageNanoAiu`. Genuine Ollama / LM Studio
+ *          ids (e.g. `ollama/qwen`) are NOT in the rate table, so they
+ *          continue to demote correctly.
  *   7. Otherwise NON-billable.
  *
  * The catalog lookup is injected via the optional `catalogLookup` callback
@@ -801,7 +814,9 @@ export function createCalculatorFromConfig(config: AICConfig): AICCalculator {
  * wiring in `dashboardData.ts` passes `classifyByCatalog` from
  * `modelCatalog.ts`.
  */
-export type CatalogLookup = (modelName: string) => { billable: boolean } | null;
+export type CatalogLookup = (
+  modelName: string,
+) => { billable: boolean; source?: "capi" | "user-config" } | null;
 
 export function classifyModelBillability(
   calculator: AICCalculator,
@@ -837,17 +852,31 @@ export function classifyModelBillability(
     return true;
   }
 
-  // 5. Authoritative online catalog (CDN manifest + Copilot CAPI /models).
-  //    A hit here outranks the local rate-table heuristic in both directions
-  //    — including marking BYOK model IDs (e.g. ollama/qwen) as non-billable
-  //    even though their family name might substring-match a known model.
+  // 5. GitHub/Copilot model names must not land in the non-billable bucket.
+  //    Pre-June-1 usage is filtered by date before this function is called;
+  //    for in-window rows, known Copilot models are billable unless the user
+  //    explicitly excluded them above.
+  if (calculator.isKnownGHCModel(modelName)) {
+    return true;
+  }
+
+  // 6. Authoritative online catalog (CDN manifest + Copilot CAPI /models).
   if (catalogLookup) {
     const hit = catalogLookup(modelName);
     if (hit) {
+      // 5a. CAPI verdict is authoritative — GitHub itself told us.
+      if (hit.source === "capi") {
+        return hit.billable;
+      }
+      // 5b. user-config / BYOK alias verdict. Only honour a demotion if the
+      //     id is genuinely unknown to the rate table; otherwise a Copilot-
+      //     billed id (claude-opus-4.7, gpt-5.4, …) the user happens to also
+      //     have configured as a BYOK alias would wrongly collapse OMP / Pi
+      //     / CLI totals (which carry `hasActualCredits=false` by design).
       return hit.billable;
     }
   }
 
-  // 6. Default: only known GHC models are billable.
-  return calculator.isKnownGHCModel(modelName);
+  // 7. Default: unknown models are informational/non-billable.
+  return false;
 }

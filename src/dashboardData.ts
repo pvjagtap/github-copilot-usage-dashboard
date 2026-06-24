@@ -31,6 +31,15 @@ function otelRequestCredits(calculator: AICCalculator, req: OTelRequest): number
   ).totalCredits;
 }
 
+function canonicalBillingModel(calculator: AICCalculator, model: string): string {
+  const rate = calculator.findModelRate(model);
+  if (rate) {
+    return rate.model;
+  }
+  return normalizeRequestModel(model)
+    .replace(/-\d{4}[-.]?\d{2}[-.]?\d{2}$/, "");
+}
+
 function normalizeRequestModel(model: string): string {
   return model.toLowerCase().trim().replace(/[\s_]+/g, "-").replace(/(\d)-(\d)/g, "$1.$2");
 }
@@ -253,20 +262,20 @@ export interface AgentUsageSummary {
 
   // ── GitHub Copilot CLI (~/.copilot/session-state) ──────────
   // Live-walked prompts × multiplier; overridden by session.shutdown
-  // ledger (cost field) whenever a clean shutdown was emitted. See
+  // totalNanoAiu whenever a clean shutdown was emitted. See
   // [src/cliScanner.ts](./cliScanner.ts) for the hybrid strategy and
-  // empirical drift bounds.
+  // shutdown-vs-live fallback behavior.
   cliSessions: number;
   /** Σ user.message events (slash-commands excluded) in the billing window. */
   cliLlmCalls: number;
   /** Σ live output tokens reported on assistant.message events. */
   cliTotalTokens: number;
-  /** AIC: ledger when present, else prompts × multiplier. */
+  /** AIC: shutdown totalNanoAiu when present, else prompts × multiplier. */
   cliTotalCredits: number;
   cliAllTimeSessions: number;
   cliAllTimeLlmCalls: number;
   cliAllTimeTokens: number;
-  /** Σ liveAic − Σ ledgerAic over sessions that have both. Pure diagnostic. */
+  /** Σ live estimate − Σ shutdown totalNanoAiu over sessions that have both. */
   cliDriftAic: number;
   /** Sessions in the window that had a session.shutdown event (ledger basis). */
   cliReconciledSessions: number;
@@ -602,8 +611,9 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
 
     const exactByModel = new Map<string, { model: string; prompt: number; output: number; cached: number; calls: number; nanoAiu: number }>();
     const addExactModel = (model: string, prompt: number, output: number, cached: number, calls: number, nanoAiu: number) => {
-      const key = model.toLowerCase();
-      const row = exactByModel.get(key) ?? { model, prompt: 0, output: 0, cached: 0, calls: 0, nanoAiu: 0 };
+      const displayModel = canonicalBillingModel(calculator, model);
+      const key = displayModel.toLowerCase();
+      const row = exactByModel.get(key) ?? { model: displayModel, prompt: 0, output: 0, cached: 0, calls: 0, nanoAiu: 0 };
       row.prompt += prompt;
       row.output += output;
       row.cached += cached;
@@ -640,11 +650,35 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
 
     const liveRequestLog = liveStats.requestLog ?? [];
     const pendingRequests = unflushedOtelRequests(liveRequestLog, debugRequestsToday, todayDate, activationTime);
+    const liveByModel = new Map<string, { model: string; requests: number; prompt: number; completion: number; traceCached: number; metricCached: number; cached: number; cacheWrite: number }>();
+    for (const live of liveStats.byModel.values()) {
+      const displayModel = canonicalBillingModel(calculator, live.model);
+      const key = displayModel.toLowerCase();
+      const row = liveByModel.get(key) ?? {
+        model: displayModel,
+        requests: 0,
+        prompt: 0,
+        completion: 0,
+        traceCached: 0,
+        metricCached: 0,
+        cached: 0,
+        cacheWrite: 0,
+      };
+      row.requests += live.requests;
+      row.prompt += live.prompt;
+      row.completion += live.completion;
+      row.traceCached += live.traceCached;
+      row.metricCached += live.metricCached;
+      row.cached += live.cached;
+      row.cacheWrite += live.cacheWrite;
+      liveByModel.set(key, row);
+    }
     const pendingByModel = new Map<string, { model: string; requests: number; prompt: number; completion: number; cached: number; cacheWrite: number; credits: number }>();
     for (const req of pendingRequests) {
-      const key = req.modelName.toLowerCase();
+      const displayModel = canonicalBillingModel(calculator, req.modelName);
+      const key = displayModel.toLowerCase();
       const row = pendingByModel.get(key) ?? {
-        model: req.modelName,
+        model: displayModel,
         requests: 0,
         prompt: 0,
         completion: 0,
@@ -662,12 +696,12 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
     }
 
     const byModelKeys = new Set<string>([
-      ...Array.from(liveStats.byModel.keys(), k => k.toLowerCase()),
+      ...liveByModel.keys(),
       ...exactByModel.keys(),
       ...pendingByModel.keys(),
     ]);
     const byModel = Array.from(byModelKeys).map(key => {
-      const live = Array.from(liveStats.byModel.values()).find(m => m.model.toLowerCase() === key);
+      const live = liveByModel.get(key);
       const exact = exactByModel.get(key);
       const pending = pendingByModel.get(key);
       const fallbackEstimate = live
@@ -1264,29 +1298,40 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
 
       // Per-model credit entries for AICCalculator.
       //
-      // OMP/Pi `actualCredits` is computed locally from our rate table —
-      // NOT from a `copilotUsageNanoAiu` returned by GitHub's backend. So
-      // for billability we re-classify by the model alone: a third-party
-      // coding agent that calls Claude through Copilot is billable; one
-      // that calls a local Ollama model is not. The explicit `billable`
-      // flag overrides the calculator's `actualCredits>0` heuristic for
-      // this case (issue #5).
+      // Prefer the agent's own usage.cost.total ledger when present. OMP/Pi
+      // store that field in USD, and agentScanner converts it to AIC credits.
+      // Older/cost-less sessions fall back to the token-rate calculator.
       for (const [model, stats] of Object.entries(session.modelBreakdown)) {
         const grossInput = stats.input + stats.cacheRead + stats.cacheWrite;
         const usage = calculator.calculateCredits(model, grossInput, stats.output, stats.cacheRead, stats.cacheWrite);
-        const billable = classify(model, false);
+        const actualCredits = stats.costCredits > 0 ? stats.costCredits : usage.totalCredits;
+        const provider = (stats.provider || session.provider || "").toLowerCase();
+        const providerIsCopilot = provider.includes("github") || provider.includes("copilot");
+        const providerIsThirdParty = provider.length > 0 && !providerIsCopilot;
+        const knownCopilotModel = calculator.isKnownGHCModel(model);
+        const billable = providerIsCopilot
+          ? true
+          : providerIsThirdParty
+            ? false
+            : knownCopilotModel
+              ? true
+              : classify(model, false);
+        if (actualCredits <= 0) {
+          continue;
+        }
+        const displayModel = providerIsThirdParty ? `${provider}/${model}` : model;
         creditEntries.push({
-          model,
+          model: displayModel,
           inputTokens: 0,
           outputTokens: 0,
           cachedTokens: 0,
           date,
-          actualCredits: usage.totalCredits,
+          actualCredits,
           billable,
         });
         if (billable) {
-          if (session.source === "omp") { ompCredits += usage.totalCredits; }
-          else { piCredits += usage.totalCredits; }
+          if (session.source === "omp") { ompCredits += actualCredits; }
+          else { piCredits += actualCredits; }
         }
       }
     }
@@ -1294,11 +1339,10 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
 
   // ─── CLI Session Credit Entries (~/.copilot) ──────────────────
   //
-  // GitHub Copilot CLI bills per *prompt* with a model multiplier — NOT
-  // per token. session.shutdown.data.modelMetrics.{m}.requests.cost is
-  // the authoritative AIC value (multiplier already applied by the CLI).
-  // For sessions without a clean shutdown we fall back to the live walk
-  // value (prompts × multiplier) computed in [cliScanner.ts](./cliScanner.ts).
+  // GitHub Copilot CLI records exact API-billed AIC in
+  // session.shutdown.data.modelMetrics.{m}.totalNanoAiu. For sessions
+  // without a clean shutdown we fall back to the live walk value
+  // (prompts × multiplier) computed in [cliScanner.ts](./cliScanner.ts).
   //
   // We push `actualCredits` directly so it bypasses the token-rate
   // calculator — the same path OMP/Pi take when they have a known credit
@@ -1307,6 +1351,7 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
   let cliCredits = 0;
   let cliTokens = 0;
   let cliCalls = 0;
+  let cliCreditEntryTotal = 0;
   if (cliScan) {
     for (const session of cliScan.sessions) {
       const date = new Date(session.lastTs || session.firstTs).toISOString().slice(0, 10);
@@ -1317,7 +1362,10 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
         // Per-model AIC: ledger wins (authoritative), live fallback otherwise.
         const aic = stats.ledgerAic !== undefined ? stats.ledgerAic : stats.liveAic;
         if (aic <= 0) { continue; }
-        const billable = classify(model, false);
+        // The CLI scanner only reads @github/copilot session-state files. If it
+        // produced a positive ledger/live AIC value, trust that source directly
+        // instead of letting BYOK/runtime catalog aliases demote it to zero.
+        const billable = true;
         creditEntries.push({
           model,
           inputTokens: 0,
@@ -1327,9 +1375,50 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
           actualCredits: aic,
           billable,
         });
+        cliCreditEntryTotal += aic;
         if (billable) {
           cliCredits += aic;
         }
+      }
+    }
+    const cliDelta = Math.round((cliScan.totalAic - cliCreditEntryTotal) * 100) / 100;
+    if (cliDelta > 0) {
+      const fallbackDate = new Date().toISOString().slice(0, 10);
+      creditEntries.push({
+        model: "github-copilot-cli",
+        inputTokens: 0,
+        outputTokens: 0,
+        cachedTokens: 0,
+        date: fallbackDate,
+        actualCredits: cliDelta,
+        billable: true,
+      });
+      cliCredits += cliDelta;
+    }
+    if (cliCredits <= 0 && cliCalls > 0) {
+      let promptFallback = 0;
+      for (const session of cliScan.sessions) {
+        const date = new Date(session.lastTs || session.firstTs).toISOString().slice(0, 10);
+        if (date < AIC_EFFECTIVE_DATE) { continue; }
+        for (const stats of Object.values(session.byModel)) {
+          promptFallback += stats.livePrompts * (stats.multiplier > 0 ? stats.multiplier : 1);
+        }
+        if (Object.keys(session.byModel).length === 0) {
+          promptFallback += session.totalLivePrompts;
+        }
+      }
+      const fallbackAic = Math.round(promptFallback * 100) / 100;
+      if (fallbackAic > 0) {
+        creditEntries.push({
+          model: "github-copilot-cli",
+          inputTokens: 0,
+          outputTokens: 0,
+          cachedTokens: 0,
+          date: new Date().toISOString().slice(0, 10),
+          actualCredits: fallbackAic,
+          billable: true,
+        });
+        cliCredits += fallbackAic;
       }
     }
   }

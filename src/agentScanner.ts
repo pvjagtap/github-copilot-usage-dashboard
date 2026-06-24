@@ -37,7 +37,11 @@ export interface AgentModelTokens {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Actual AIC credits from the agent's usage.cost.total ledger, when present. */
+  costCredits: number;
   llmCalls: number;
+  /** Provider observed for this model (for example github-copilot, anthropic, ollama). */
+  provider: string;
 }
 
 export interface AgentSessionData {
@@ -56,6 +60,8 @@ export interface AgentSessionData {
   totalCacheRead: number;
   totalCacheWrite: number;
   totalTokens: number; // input + output + cacheRead + cacheWrite
+  /** Actual AIC credits from usage.cost.total, converted from USD to credits. */
+  totalCostCredits: number;
   premiumRequests: number;
   /** Per-model token breakdown; used for per-model AIC calculation in dashboardData */
   modelBreakdown: Record<string, AgentModelTokens>;
@@ -147,6 +153,7 @@ function parseAgentSession(
   let totalOutput = 0;
   let totalCacheRead = 0;
   let totalCacheWrite = 0;
+  let totalCostCredits = 0;
   let totalPremium = 0;
   let llmCalls = 0;
   let primaryModel = "";
@@ -185,12 +192,17 @@ function parseAgentSession(
     const out = typeof usage["output"] === "number" ? usage["output"] : 0;
     const cr = typeof usage["cacheRead"] === "number" ? usage["cacheRead"] : 0;
     const cw = typeof usage["cacheWrite"] === "number" ? usage["cacheWrite"] : 0;
+    const cost = isObj(usage["cost"]) && typeof usage["cost"]["total"] === "number"
+      ? usage["cost"]["total"] * 100
+      : 0;
     const pr = typeof usage["premiumRequests"] === "number" ? usage["premiumRequests"] : 0;
+    const callProvider = typeof msg["provider"] === "string" ? msg["provider"] : provider;
 
     totalInput += inp;
     totalOutput += out;
     totalCacheRead += cr;
     totalCacheWrite += cw;
+    totalCostCredits += cost;
     totalPremium += pr;
     llmCalls++;
 
@@ -202,14 +214,20 @@ function parseAgentSession(
       existing.output += out;
       existing.cacheRead += cr;
       existing.cacheWrite += cw;
+      existing.costCredits += cost;
       existing.llmCalls++;
+      if (!existing.provider && callProvider) {
+        existing.provider = callProvider;
+      }
     } else {
       modelMap.set(callModel, {
         input: inp,
         output: out,
         cacheRead: cr,
         cacheWrite: cw,
+        costCredits: cost,
         llmCalls: 1,
+        provider: callProvider || "",
       });
     }
 
@@ -264,6 +282,7 @@ function parseAgentSession(
     totalCacheRead,
     totalCacheWrite,
     totalTokens: totalInput + totalOutput + totalCacheRead + totalCacheWrite,
+    totalCostCredits,
     premiumRequests: totalPremium,
     modelBreakdown: Object.fromEntries(modelMap),
     firstTs,

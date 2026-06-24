@@ -50,11 +50,11 @@ const cfg = { ...DEFAULT_AIC_CONFIG };
   assert("with catalog: claude-fable-5 is billable", withCat === true);
 }
 
-// ── Test 2: catalog hit with billable=false outranks isKnownGHCModel
+// ── Test 2: known GitHub model names do not enter the non-billable bucket
 {
-  console.log("== Test 2: catalog demotes BYOK-listed model to non-billable ==");
+  console.log("== Test 2: known GitHub model name stays billable despite BYOK alias ==");
   // The CDN manifest lists e.g. 'gpt-4o' under the openai (BYOK) provider too.
-  // A BYOK-only catalog entry should override the rate-table substring match.
+  // The dashboard must not show GitHub model names in the non-billable panel.
   const lookup: CatalogLookup = (m) =>
     m.toLowerCase().startsWith("gpt-4o-byok") ? { billable: false } : null;
 
@@ -62,9 +62,9 @@ const cfg = { ...DEFAULT_AIC_CONFIG };
   const noCat = classifyModelBillability(calc, cfg, "gpt-4o-byok-test", false);
   assert("without catalog: substring match makes it billable", noCat === true);
 
-  // With catalog: BYOK entry forces non-billable.
+  // With catalog: the known GitHub model name stays billable.
   const withCat = classifyModelBillability(calc, cfg, "gpt-4o-byok-test", false, lookup);
-  assert("with catalog: BYOK entry forces non-billable", withCat === false);
+  assert("with catalog: known GitHub model alias stays billable", withCat === true);
 }
 
 // ── Test 3: catalog miss falls through to existing precedence

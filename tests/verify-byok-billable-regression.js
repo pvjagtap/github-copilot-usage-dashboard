@@ -89,26 +89,49 @@ console.log("\n== v1.10.14 regression: BYOK third-party catalog must NOT demote 
   );
 }
 
-// CASE 2: same row, hasActualCredits=false — the pre-fix behavior. Catalog
-// demotion should win, so it correctly stays non-billable. This pins the
-// behavior so the fix doesn't accidentally over-promote model-name-only rows
-// (which would reintroduce Ollama/BYOK leakage from issue #5).
+// CASE 2: same row, hasActualCredits=false. This is the OMP / Pi / CLI
+// scenario — those traffic sources compute AIC locally from the rate table
+// (no `copilotUsageNanoAiu` ever flows through them) and ALWAYS pass
+// hasActualCredits=false. v1.10.14 demoted them to NON-billable here,
+// collapsing the OMP / Pi credit columns to 0.00. v1.10.15 fixes this:
+// when a user-config (BYOK alias) demotion collides with a rate-table-
+// known GHC model id, the rate table wins. The model is genuinely billed
+// when used through Copilot's coding-agent channels, even though the user
+// also happens to have a BYOK Anthropic key configured under the same id.
 {
   const isBillable = classifyModelBillability(calc, cfg, "claude-opus-4.7", /* hasActualCredits */ false, byokCatalog);
   ok(
-    "claude-opus-4.7 with hasActualCredits=false is NON-BILLABLE (catalog wins)",
-    isBillable === false,
+    "claude-opus-4.7 with hasActualCredits=false is BILLABLE (rate-table wins over BYOK alias demotion — fixes OMP/Pi=0.00)",
+    isBillable === true,
     `got ${isBillable}`,
   );
 }
 
 // CASE 3: an Ollama row that hasActualCredits=false (the local-model case).
-// Must stay non-billable so issue #5 doesn't regress.
+// Must stay non-billable so issue #5 doesn't regress. The id is NOT in the
+// rate table, so the user-config demotion is honoured at step 5b.
 {
   const isBillable = classifyModelBillability(calc, cfg, "ollama/qwen2.5-coder:7b", /* hasActualCredits */ false, byokCatalog);
   ok(
-    "ollama/qwen2.5-coder:7b stays non-billable (no actual credits, not in rate table)",
+    "ollama/qwen2.5-coder:7b stays non-billable (no actual credits, not in rate table, BYOK demotion honoured)",
     isBillable === false,
+    `got ${isBillable}`,
+  );
+}
+
+// CASE 3b: even a catalog non-billable verdict must not put a known GitHub
+// model name in the non-billable panel. The local rate table is the display
+// guardrail for known Copilot models; truly unknown/non-billed catalog entries
+// still fall through to non-billable.
+{
+  const capiNonBillable = (name) =>
+    name === "claude-opus-4.7"
+      ? { billable: false, source: "capi", vendor: "anthropic" }
+      : undefined;
+  const isBillable = classifyModelBillability(calc, cfg, "claude-opus-4.7", /* hasActualCredits */ false, capiNonBillable);
+  ok(
+    "claude-opus-4.7 with catalog billable=false still stays billable (known GitHub model)",
+    isBillable === true,
     `got ${isBillable}`,
   );
 }

@@ -289,14 +289,14 @@ export function classifyByCatalog(modelName: string): ModelCatalogEntry | null {
  * Network failures are swallowed — the classifier will simply not see this
  * source and fall back to the rate-table heuristic.
  */
-export async function loadCatalog(
+export function loadCatalog(
   ctx: vscode.ExtensionContext,
   opts: { enabled: boolean; log: LogFn; refreshNow?: boolean }
 ): Promise<ModelCatalog | null> {
   // Honour the user-facing kill switch — `useOnlineModelCatalog === false`.
   if (!opts.enabled) {
     cached = null;
-    return null;
+    return Promise.resolve(null);
   }
 
   // 1. Hydrate from disk cache so the classifier has something immediately.
@@ -318,7 +318,7 @@ export async function loadCatalog(
   // 2. Decide whether to refresh from network.
   const fresh = cached && Date.now() - cached.fetchedAt < CATALOG_TTL_MS;
   if (fresh && !opts.refreshNow) {
-    return cached;
+    return Promise.resolve(cached);
   }
 
   // 3. Network refresh — fire and (mostly) forget. The first successful
@@ -327,7 +327,7 @@ export async function loadCatalog(
     opts.log(`modelCatalog: refresh failed silently — ${String(err)}`);
   });
 
-  return cached;
+  return Promise.resolve(cached);
 }
 
 // ─── Internal — network refresh ──────────────────────────────

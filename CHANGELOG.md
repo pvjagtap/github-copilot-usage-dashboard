@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.15] - 2026-06-24
+
+### Fixed
+
+- OMP and Pi AIC now use `usage.cost.total` when present, with token-rate fallback for older sessions.
+- Known Copilot model names are no longer demoted by BYOK/user-config aliases.
+- Non-Copilot OMP/Pi providers remain non-billable and display with provider-qualified names such as `azure-foundry/claude-sonnet-4-6`.
+- Short local model names such as `gpt-4`, `gpt-5`, and `claude` no longer match longer Copilot rate-table ids.
+- Copilot CLI shutdown `totalNanoAiu` is now the authoritative AIC source; `requests.cost` is only a legacy fallback.
+- Copilot CLI source totals recover from zeroed live multipliers and no longer show `0.00` when billable prompts or shutdown AIC exist.
+- Model aliases such as `gpt-5.5` and `gpt-5.5-2026-04-23` now merge into one billing-model row.
+- Usage by Source table text is slightly larger for readability.
+
+### Added
+
+- Regression coverage for CLI `totalNanoAiu`, BYOK alias demotion, provider-qualified non-billable rows, model alias merging, and CLI zero-AIC recovery.
+
+### Changed
+
+- `CatalogLookup` can report `source: "capi" | "user-config"` so CAPI verdicts and BYOK alias hints can be handled separately.
+
 ## [1.10.14] - 2026-06-23
 
 ### Fixed

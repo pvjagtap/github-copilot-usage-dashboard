@@ -73,6 +73,7 @@ if (!cliMod || !cliMod.__test) {
 }
 const { scanCliSessions, getCopilotHome } = cliMod;
 const { parseSessionContent, isSlashCommand, multiplierFor, enumerateSessionFiles, FALLBACK_MULTIPLIERS } = cliMod.__test;
+const { __setCatalogForTesting } = require(path.join(OUT, "modelCatalog.js"));
 
 // ── tiny assert harness ──────────────────────────────────────────────
 let passed = 0;
@@ -117,6 +118,18 @@ assert("FALLBACK table includes the documented set",
   "claude-sonnet-4" in FALLBACK_MULTIPLIERS &&
   "claude-haiku-4-5" in FALLBACK_MULTIPLIERS &&
   "gpt-4o-mini" in FALLBACK_MULTIPLIERS);
+__setCatalogForTesting({
+  fetchedAt: Date.now(),
+  byId: new Map(),
+  cdnProviders: {},
+  userVendorByModelId: new Map([["claude-sonnet-4.6", "anthropic"]]),
+});
+assert(
+  "BYOK/user catalog demotion cannot zero GitHub Copilot CLI multiplier",
+  multiplierFor("claude-sonnet-4.6") === 1,
+  multiplierFor("claude-sonnet-4.6"),
+);
+__setCatalogForTesting(null);
 
 // Parser — synthesize a tiny session
 console.log("-- A.3 parseSessionContent attribution & hybrid --");
@@ -176,6 +189,45 @@ assert("haiku ledgerAic === undefined (not in shutdown metrics)",
 assert("primaryModel is the one with most live prompts (tie → first alphabetically)",
   sess.primaryModel === "claude-haiku-4-5" || sess.primaryModel === "claude-opus-4" || sess.primaryModel === "claude-sonnet-4");
 assert("firstTs / lastTs span the events", sess.firstTs === 1718000000000 && sess.lastTs === 1718000009000);
+
+console.log("-- A.3b session.shutdown totalNanoAiu is authoritative --");
+const nanoLedgerEvents = [
+  { type: "session.start", timestamp: "2026-06-24T16:40:00.000Z", data: { selectedModel: "claude-sonnet-4.6" } },
+  { type: "user.message", timestamp: "2026-06-24T16:40:01.000Z", data: { content: "hello" } },
+  { type: "assistant.message", timestamp: "2026-06-24T16:40:02.000Z", data: { model: "claude-sonnet-4.6", outputTokens: 34192 } },
+  { type: "user.message", timestamp: "2026-06-24T16:40:03.000Z", data: { content: "follow up" } },
+  { type: "session.shutdown", timestamp: "2026-06-24T16:43:48.322Z", data: {
+    totalPremiumRequests: 2,
+    totalNanoAiu: 178877115000,
+    modelMetrics: {
+      "claude-sonnet-4.6": {
+        requests: { count: 35, cost: 2 },
+        usage: {
+          inputTokens: 1602363,
+          outputTokens: 34192,
+          cacheReadTokens: 1369803,
+          cacheWriteTokens: 223027,
+          reasoningTokens: 8346,
+        },
+        totalNanoAiu: 178877115000,
+      },
+    },
+    currentModel: "claude-sonnet-4.6",
+  } },
+].map(e => JSON.stringify(e)).join("\n");
+const nanoSess = parseSessionContent(nanoLedgerEvents, "/synthetic/nano/events.jsonl", "new", "nano-1");
+assert("nanoAiu shutdown session parsed", nanoSess !== null);
+assert(
+  "model ledgerAic uses totalNanoAiu/1e9, not requests.cost",
+  approxEq(nanoSess.byModel["claude-sonnet-4.6"].ledgerAic, 178.877115, 0.000001),
+  nanoSess.byModel["claude-sonnet-4.6"].ledgerAic,
+);
+assert(
+  "session totalAic uses totalNanoAiu/1e9, not requests.cost",
+  approxEq(nanoSess.totalAic, 178.877115, 0.000001),
+  nanoSess.totalAic,
+);
+assert("nanoAiu ledger inputTokens = 1602363", nanoSess.byModel["claude-sonnet-4.6"].ledgerInputTokens === 1602363);
 
 // A.4 — live-only session (no shutdown)
 console.log("-- A.4 parseSessionContent live-only fallback --");
