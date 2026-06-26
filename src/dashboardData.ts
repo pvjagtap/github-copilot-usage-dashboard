@@ -1174,8 +1174,8 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
     actualCredits?: number;
     billable: boolean;
   }> = [];
-  const classify = (model: string, hasActual: boolean): boolean =>
-    classifyModelBillability(calculator, config, model, hasActual, classifyByCatalog);
+  const classify = (model: string, hasActual: boolean, sourceHint?: string): boolean =>
+    classifyModelBillability(calculator, config, model, hasActual, classifyByCatalog, sourceHint);
   for (const t of aicTurns) {
     if (t.debugRequests && t.debugRequests.length > 0) {
       for (const req of t.debugRequests) {
@@ -1308,14 +1308,7 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
         const provider = (stats.provider || session.provider || "").toLowerCase();
         const providerIsCopilot = provider.includes("github") || provider.includes("copilot");
         const providerIsThirdParty = provider.length > 0 && !providerIsCopilot;
-        const knownCopilotModel = calculator.isKnownGHCModel(model);
-        const billable = providerIsCopilot
-          ? true
-          : providerIsThirdParty
-            ? false
-            : knownCopilotModel
-              ? true
-              : classify(model, false);
+        const billable = providerIsThirdParty ? false : classify(model, false, provider || undefined);
         if (actualCredits <= 0) {
           continue;
         }

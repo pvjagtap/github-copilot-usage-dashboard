@@ -122,7 +122,26 @@ console.log("\n== Test 5: excludeModels demotes known model to non-billable ==")
   ok("claude-sonnet-4.5 becomes non-billable when excluded", isBillable === false);
 }
 
-console.log("\n== Test 6: master switch off restores legacy behaviour ==");
+console.log("\n== Test 6: Copilot resolved ids and source hints are billable ==");
+{
+  const calc = new AICCalculator(DEFAULT_MODEL_COSTS, undefined);
+  const cfg = makeConfig();
+  const resolved = classifyModelBillability(calc, cfg, "capi-eus2-ptuc-gb300-gpt-5", false);
+  ok("capi-* Copilot resolved id is billable", resolved === true);
+
+  const hinted = classifyModelBillability(calc, cfg, "opaque-preview-deployment", false, undefined, "github-copilot");
+  ok("github-copilot source hint promotes opaque id to billable", hinted === true);
+
+  const excluded = classifyModelBillability(
+    calc,
+    makeConfig({ excludeModels: ["capi-eus2"] }),
+    "capi-eus2-ptuc-gb300-gpt-5",
+    false,
+  );
+  ok("excludeModels still overrides Copilot resolved id", excluded === false);
+}
+
+console.log("\n== Test 7: master switch off restores legacy behaviour ==");
 {
   const calc = new AICCalculator(DEFAULT_MODEL_COSTS, undefined);
   const cfg = makeConfig({ includeOnlyBilledModels: false });

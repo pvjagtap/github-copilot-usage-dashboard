@@ -807,7 +807,8 @@ export function createCalculatorFromConfig(config: AICConfig): AICCalculator {
  *          an explicit `copilotUsageNanoAiu`. Genuine Ollama / LM Studio
  *          ids (e.g. `ollama/qwen`) are NOT in the rate table, so they
  *          continue to demote correctly.
- *   7. Otherwise NON-billable.
+ *   7. Copilot source / resolved-id hint — route is Copilot-billed.
+ *   8. Otherwise NON-billable.
  *
  * The catalog lookup is injected via the optional `catalogLookup` callback
  * to keep this module free of side effects and easy to test — the production
@@ -818,14 +819,26 @@ export type CatalogLookup = (
   modelName: string,
 ) => { billable: boolean; source?: "capi" | "user-config" } | null;
 
+function isCopilotSourceHint(sourceHint?: string): boolean {
+  const lower = (sourceHint || "").toLowerCase();
+  return lower.includes("github") || lower.includes("copilot");
+}
+
+function isCopilotResolvedModelId(modelName: string): boolean {
+  const lower = (modelName || "").toLowerCase().trim();
+  return /^(capi|capui)[-_]/.test(lower);
+}
+
 export function classifyModelBillability(
   calculator: AICCalculator,
   config: AICConfig,
   modelName: string,
   hasActualCredits: boolean,
   catalogLookup?: CatalogLookup,
+  sourceHint?: string,
 ): boolean {
   const lower = (modelName || "").toLowerCase();
+  const isCopilotRouted = isCopilotSourceHint(sourceHint) || isCopilotResolvedModelId(modelName);
 
   // 1. Explicit exclude wins over everything else (lets the user mark a
   //    particular alias as informational even if the rate table knows it).
@@ -868,6 +881,9 @@ export function classifyModelBillability(
       if (hit.source === "capi") {
         return hit.billable;
       }
+      if (isCopilotRouted) {
+        return true;
+      }
       // 5b. user-config / BYOK alias verdict. Only honour a demotion if the
       //     id is genuinely unknown to the rate table; otherwise a Copilot-
       //     billed id (claude-opus-4.7, gpt-5.4, …) the user happens to also
@@ -877,6 +893,12 @@ export function classifyModelBillability(
     }
   }
 
-  // 7. Default: unknown models are informational/non-billable.
+  // 7. Copilot-routed opaque resolved ids are billable even before the
+  //    public model catalog/rate table learns their internal deployment name.
+  if (isCopilotRouted) {
+    return true;
+  }
+
+  // 8. Default: unknown models are informational/non-billable.
   return false;
 }

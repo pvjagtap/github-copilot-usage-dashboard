@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.16] - 2026-06-26
+
+### Fixed
+
+- Copilot-routed opaque resolved IDs such as `capi-*` and `capui-*` are now treated as billable unless explicitly excluded or marked non-billable by CAPI.
+
 ## [1.10.15] - 2026-06-24
 
 ### Fixed
