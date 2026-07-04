@@ -16,3 +16,11 @@ copilot_all_tools.jsonl
 AIC-PROCESSING-PIPELINE.md
 aic-formula.html
 implementation-notes.html
+from_Chris/**
+.agents/**
+.claude/**
+.fallow/**
+tests/**
+eslint.config.mjs
+repo.config.json
+apply-repo-config.js

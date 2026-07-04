@@ -1034,7 +1034,15 @@ function parseDebugLogLines(content: string): ParsedDebugLog | null {
     const type = entry.type;
     if (type === "session_start") {
       sessionId = typeof entry.sid === "string" ? entry.sid : "";
-    } else if (type === "child_session_ref") {
+    } else if (!sessionId && typeof entry.sid === "string" && entry.sid) {
+      // Fallback: extract sid from ANY entry type when session_start is missing.
+      // This handles debug-logs that resume after a VS Code reload/restart
+      // without re-emitting session_start — those files still carry the sid
+      // on turn_end, agent_response, llm_request, and other entry types.
+      sessionId = entry.sid;
+    }
+
+    if (type === "child_session_ref") {
       const childFile = str(entry, "attrs", "childLogFile");
       if (childFile) {
         childLogFiles.set(childFile, currentTurn);

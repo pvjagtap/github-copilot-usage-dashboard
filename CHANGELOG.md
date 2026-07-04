@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.24] - 2026-07-04
+
+### Added
+
+- **Range-aware dashboard** — all AIC metrics, calendar, model breakdown, and Usage-by-Source cards now recompute when the Range dropdown changes (previously the KPIs updated but the AIC billing section stayed pinned to the full billing cycle). Default range is now `This Month`.
+- **Month picker (Jan–Dec)** — new option group in the Range dropdown lets users jump straight to any calendar month; auto-detects year (current year, or previous if month hasn't occurred yet).
+- **Session-derived daily heatmap** — calendar now aggregates per-day credits from filtered sessions so historical months (June, Prev Month, etc.) display real activity instead of an empty grid. The current cycle still prefers the authoritative per-request `aic.byDay` when present.
+- **Range-scoped overage** — overage dollar amounts (with promo / without promo / promo savings) are recalculated from the range-filtered credit total instead of the static current-cycle values.
+
+### Fixed
+
+- **Scanner missing `session_start` fallback** — debug-logs that continue across a VS Code reload no longer re-emit `session_start`, which previously caused `parseDebugLogLines()` to drop the entire log (silently under-counting by up to ~50% in one real-world sample: 6,135 credits lost from a single 244 MB log). The parser now extracts `sid` from any entry type when `session_start` is missing.
+- **Historical-range daily average** — was computed from `aic.byDay` (current cycle only), which for past months made `rangeDaysCount` collapse to 1 and inflated Daily Avg to equal the full-period total. Now derived from a per-session day map keyed by `lastDate`.
+- **Projection & runway on closed periods** — hidden (or labeled `closed period`) when the selected range doesn't include today. Previously "Prev Month" would show nonsensical projections based on the closed period's pace applied to remaining current-cycle days.
+- **AIC model table split columns** — historical ranges render `—` for input/output/cached credit split cells (that per-request split only exists in the current cycle's `aic.byModel`) instead of misleading `0.00` alongside real totals.
+- **Misleading "Input Credits" KPI** — replaced with **Prompt Tokens** (exact from sessions) instead of the previous `rangeTotal × (aic.inputCredits / aic.totalCredits)` ratio approximation.
+- **Range boundaries used UTC ISO dates** — `getRangeBounds` now formats dates in local time, matching the calendar's existing local-Y-M-D convention and preventing off-by-one shifts for users east of UTC.
+- **Usage by Source `Total` column** — showed a misleading total mixing range-filtered VS Code data with all-time OMP/Pi/CLI data. Now displays `—` with an explanatory tooltip when any range other than All Time is selected.
+
+### Changed
+
+- **VSIX slimmed** — `.vscodeignore` now excludes `tests/`, `.agents/`, `.claude/`, `.fallow/`, `from_Chris/`, `eslint.config.mjs`, `repo.config.json`, and `apply-repo-config.js`. Published VSIX is 349 KB (28 files) — no dev artifacts, no analysis scripts, no auxiliary workspaces.
+
 ## [1.10.16] - 2026-06-26
 
 ### Fixed

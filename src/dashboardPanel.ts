@@ -354,12 +354,12 @@ td { padding: 8px; border-bottom: 1px solid var(--border); font-size: 12px; }
 <script>
 let DATA = ${jsonData};
 const MODEL_COLORS = ['#58a6ff','#3fb950','#bc8cff','#d29922','#f85149','#79c0ff','#f778ba','#a5d6ff'];
-const RANGE_LABELS = {'7d':'Last 7 Days','30d':'Last 30 Days','90d':'Last 90 Days','tw':'This Week','tm':'This Month','pm':'Prev Month','all':'All Time'};
+const RANGE_LABELS = {'7d':'Last 7 Days','30d':'Last 30 Days','90d':'Last 90 Days','tw':'This Week','tm':'This Month','pm':'Prev Month','jan':'January','feb':'February','mar':'March','apr':'April','may':'May','jun':'June','jul':'July','aug':'August','sep':'September','oct':'October','nov':'November','dec':'December','all':'All Time'};
 const KNOWN_MULT = {'claude-opus':3,'claude-sonnet':1,'claude-haiku':0.25,'gpt-5.5':7.5,'gpt-5.4':1,'gpt-5':1,'gpt-4.1':1,'gpt-4o-mini':0.25,'gpt-4.1-mini':0.25,'o3':3,'o3-mini':0.25,'o4-mini':0.25,'gemini-2.5-pro':3,'gemini-2.0-flash':0.25};
 
 const vscode = acquireVsCodeApi();
 const _saved = vscode.getState() || {};
-let selectedRange = _saved.selectedRange || '30d';
+let selectedRange = _saved.selectedRange || 'tm';
 let selectedModels = _saved.selectedModels ? new Set(_saved.selectedModels.filter(m => DATA.allModels.includes(m))) : new Set(DATA.allModels);
 let selectedRefresh = typeof _saved.selectedRefresh === 'number' ? _saved.selectedRefresh : 120;
 let selectedTz = _saved.selectedTz || 'local';
@@ -398,7 +398,8 @@ function mbadge(m) {
 }
 function getRangeBounds(r) {
   const now = new Date();
-  const iso = d => d.toISOString().slice(0,10);
+  // Local Y-M-D (not toISOString) so range boundaries match user's calendar day.
+  const iso = d => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
   if (r === 'all') return { start: '', end: '' };
   if (r === '7d') { const d=new Date(now); d.setDate(d.getDate()-7); return {start:iso(d),end:''}; }
   if (r === '30d') { const d=new Date(now); d.setDate(d.getDate()-30); return {start:iso(d),end:''}; }
@@ -406,9 +407,28 @@ function getRangeBounds(r) {
   if (r === 'tw') { const d=new Date(now); const day=d.getDay(); const diff=day===0?6:day-1; d.setDate(d.getDate()-diff); return {start:iso(d),end:''}; }
   if (r === 'tm') { return {start:iso(new Date(now.getFullYear(),now.getMonth(),1)),end:''}; }
   if (r === 'pm') { const s=new Date(now.getFullYear(),now.getMonth()-1,1); const e=new Date(now.getFullYear(),now.getMonth(),0); return {start:iso(s),end:iso(e)}; }
+  // Named months: jan..dec — show that month in the current year (or prev year if month > current)
+  const monthMap = {jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
+  if (monthMap.hasOwnProperty(r)) {
+    const mi = monthMap[r];
+    const yr = mi > now.getMonth() ? now.getFullYear() - 1 : now.getFullYear();
+    const s = new Date(yr, mi, 1);
+    const e = new Date(yr, mi + 1, 0);
+    return {start:iso(s), end:iso(e)};
+  }
   return {start:'',end:''};
 }
-function rangeIncludesToday(r) { return r !== 'pm'; }
+function rangeIncludesToday(r) {
+  const now = new Date();
+  if (r === 'pm') return false;
+  const monthMap = {jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
+  if (monthMap.hasOwnProperty(r)) {
+    const mi = monthMap[r];
+    const yr = mi > now.getMonth() ? now.getFullYear() - 1 : now.getFullYear();
+    return yr === now.getFullYear() && mi === now.getMonth();
+  }
+  return true;
+}
 
 function buildFilterBar() {
   const allCount = DATA.allModels.length;
@@ -425,9 +445,17 @@ function buildFilterBar() {
   });
 
   let rangeOpts = '';
-  ['7d','30d','90d','tw','tm','pm','all'].forEach(r => {
-    const sel = r === selectedRange ? ' selected' : '';
-    rangeOpts += '<option value="'+r+'"'+sel+'>'+esc(RANGE_LABELS[r]||r)+'</option>';
+  const rangeGroups = [
+    {label:'Relative', items:['7d','30d','90d','tw','tm','pm','all']},
+    {label:'Month', items:['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec']},
+  ];
+  rangeGroups.forEach(g => {
+    rangeOpts += '<optgroup label="'+g.label+'">';
+    g.items.forEach(r => {
+      const sel = r === selectedRange ? ' selected' : '';
+      rangeOpts += '<option value="'+r+'"'+sel+'>'+esc(RANGE_LABELS[r]||r)+'</option>';
+    });
+    rangeOpts += '</optgroup>';
   });
 
   let refreshOpts = '';
@@ -564,7 +592,10 @@ function render() {
   const rl = RANGE_LABELS[selectedRange] || selectedRange;
   const refreshStatus = selectedRefresh > 0 ? '' : ' (auto-refresh off)';
   document.getElementById('subtitle').textContent = 'Updated: '+DATA.generatedAt+' — '+rl+refreshStatus;
-  const aicTotal = DATA.aicSummary ? DATA.aicSummary.totalCredits.toFixed(1) : '0';
+
+  // Compute range-filtered AIC total from per-session credits
+  const rangeAicTotal = sessions.reduce((s,x) => s + (x.aicCredits || 0), 0);
+  const aicTotal = rangeAicTotal.toFixed(1);
   const aicBudget = DATA.aicSummary ? DATA.aicSummary.monthlyBudget : 0;
   const ag = DATA.agentSummary;
   const aicSub = aicBudget > 0 ? aicTotal+'/'+aicBudget+' credits' : 'no budget set';
@@ -573,15 +604,36 @@ function render() {
     : aicSub;
 
   // === HERO KPIs (4 headline cards with deltas & accent stripes) ===
-  // Compute "runway days" — how many days of budget left at current pace
+  // Build a per-day credit map from filtered sessions so daily average works
+  // for ANY range (not just current billing cycle). Then compute daily average
+  // from actually-populated days.
+  const heroSessionDayMap = {};
+  sessions.forEach(s => {
+    if (s.lastDate && s.aicCredits) {
+      heroSessionDayMap[s.lastDate] = (heroSessionDayMap[s.lastDate] || 0) + s.aicCredits;
+    }
+  });
+  const heroActiveDayCount = Object.keys(heroSessionDayMap).length || 1;
+  const heroDailyAvg = rangeAicTotal / heroActiveDayCount;
+
+  // Only project/runway when the selected range is live (includes today).
+  // For closed periods (Prev Month, a past named month), projection & runway
+  // are meaningless — the period is done.
+  const rangeIsLive = rangeIncludesToday(selectedRange);
+  const heroProjected = rangeIsLive && DATA.aicSummary && DATA.aicSummary.daysRemaining > 0
+    ? DATA.aicSummary.totalCredits + (heroDailyAvg * DATA.aicSummary.daysRemaining)
+    : rangeAicTotal;
+
   let runwayTxt = '';
-  if (DATA.aicSummary && DATA.aicSummary.monthlyBudget > 0 && DATA.aicSummary.dailyAverage > 0) {
+  if (rangeIsLive && DATA.aicSummary && DATA.aicSummary.monthlyBudget > 0 && heroDailyAvg > 0) {
     const remaining = DATA.aicSummary.monthlyBudget - DATA.aicSummary.totalCredits;
-    const days = Math.max(0, Math.floor(remaining / DATA.aicSummary.dailyAverage));
+    const days = Math.max(0, Math.floor(remaining / heroDailyAvg));
     runwayTxt = days + ' days runway at current pace';
+  } else if (!rangeIsLive) {
+    runwayTxt = 'closed period';
   }
-  const projPct = DATA.aicSummary && DATA.aicSummary.monthlyBudget > 0
-    ? Math.round((DATA.aicSummary.projectedTotal / DATA.aicSummary.monthlyBudget) * 100)
+  const projPct = rangeIsLive && DATA.aicSummary && DATA.aicSummary.monthlyBudget > 0
+    ? Math.round((heroProjected / DATA.aicSummary.monthlyBudget) * 100)
     : 0;
   const spendDelta = projPct >= 100
     ? '<span class="h-delta warn">↑ projecting '+projPct+'% of budget</span>'
@@ -623,8 +675,8 @@ function render() {
   }
 
   renderOtel(DATA.liveOtel);
-  renderAIC(DATA.aicSummary);
-  renderAgentSessions(DATA.agentSummary);
+  renderAIC(DATA.aicSummary, bounds, sessions);
+  renderAgentSessions(DATA.agentSummary, bounds, sessions);
   renderDaily(daily);
   renderModelPie(sessions);
   renderProjectBar(sessions);
@@ -785,24 +837,55 @@ function buildCreditCalendar(cycleStart, cycleEnd, dayMap) {
     + headerRow + gridCells + legend;
 }
 
-function renderAIC(aic) {
+function renderAIC(aic, bounds, filteredSessions) {
   const el = document.getElementById('aic-section');
   if (!aic || aic.totalCredits === 0) {
     el.innerHTML = '<div class="table-card"><div class="section-head"><div class="section-title">AI Credits (AIC)</div><div class="section-subtitle">No usage data yet</div></div><div class="empty-panel">AI Credits will be calculated once token usage data is available. Configure your plan in Settings → Copilot Usage.</div></div>';
     return;
   }
 
-  const pct = aic.monthlyBudget > 0 ? Math.min(100, Math.round((aic.totalCredits / aic.monthlyBudget) * 100)) : 0;
-  // Actual % of budget (uncapped) — shown in label so user sees true overage like 494%
-  const pctActual = aic.monthlyBudget > 0 ? Math.round((aic.totalCredits / aic.monthlyBudget) * 100) : 0;
+  // Range-filtered totals from sessions
+  const rangeTotal = filteredSessions.reduce((s,x) => s + (x.aicCredits || 0), 0);
+
+  // Build a per-day credit map from filtered sessions. This is authoritative
+  // for ANY range (past months, current cycle) because it aggregates the
+  // per-session aicCredits by lastDate. aic.byDay only covers the
+  // current billing cycle and cannot be trusted for historical ranges.
+  const sessionDayMap = {};
+  filteredSessions.forEach(s => {
+    if (s.lastDate && s.aicCredits) {
+      sessionDayMap[s.lastDate] = (sessionDayMap[s.lastDate] || 0) + s.aicCredits;
+    }
+  });
+  // Prefer aic.byDay for days it covers (per-request precision from turns),
+  // fall back to session aggregation for days outside the current cycle.
+  const filteredByDay = (aic.byDay||[]).filter(d => (!bounds.start || d.day >= bounds.start) && (!bounds.end || d.day <= bounds.end));
+  const finalDayMap = {};
+  filteredByDay.forEach(d => { finalDayMap[d.day] = d.credits; });
+  Object.entries(sessionDayMap).forEach(([day, credits]) => {
+    if (!(day in finalDayMap)) { finalDayMap[day] = credits; }
+  });
+
+  // Daily average from days that actually had activity — accurate for any range.
+  const activeDayCount = Object.keys(finalDayMap).length || 1;
+  const rangeDailyAvg = rangeTotal / activeDayCount;
+
+  // Projection only makes sense when the range is live (includes today).
+  const aicRangeIsLive = rangeIncludesToday(selectedRange);
+  const rangeProjected = aicRangeIsLive && aic.daysRemaining > 0
+    ? aic.totalCredits + (rangeDailyAvg * aic.daysRemaining)
+    : rangeTotal;
+
+  const pct = aic.monthlyBudget > 0 ? Math.min(100, Math.round((rangeTotal / aic.monthlyBudget) * 100)) : 0;
+  const pctActual = aic.monthlyBudget > 0 ? Math.round((rangeTotal / aic.monthlyBudget) * 100) : 0;
   // Calmer thresholds: blue→green→amber→red, only red when actually past budget
   const barColor = pctActual >= 100 ? 'var(--red)' : pctActual >= 85 ? 'var(--orange)' : pctActual >= 50 ? 'var(--green)' : 'var(--blue)';
-  const projPct = aic.monthlyBudget > 0 ? Math.round((aic.projectedTotal / aic.monthlyBudget) * 100) : 0;
+  const projPct = aicRangeIsLive && aic.monthlyBudget > 0 ? Math.round((rangeProjected / aic.monthlyBudget) * 100) : 0;
   const projColor = projPct >= 100 ? 'var(--red)' : projPct >= 80 ? 'var(--orange)' : 'var(--green)';
 
-  // Runway: how many days left at current pace
-  const runwayDays = aic.dailyAverage > 0
-    ? Math.max(0, Math.floor((aic.monthlyBudget - aic.totalCredits) / aic.dailyAverage))
+  // Runway: only meaningful for live ranges (past periods are closed)
+  const runwayDays = aicRangeIsLive && rangeDailyAvg > 0
+    ? Math.max(0, Math.floor((aic.monthlyBudget - aic.totalCredits) / rangeDailyAvg))
     : 0;
 
   // Promo info
@@ -812,50 +895,87 @@ function renderAIC(aic) {
   const promoTag = isPromo ? ' <span style="color:var(--green);font-size:11px;font-weight:600">⚡ PROMO (until '+promo.promoEndDate+')</span>' : '';
 
   // Budget progress bar
-  const runwayBadge = runwayDays > 0
-    ? ' · <span style="color:var(--green)">~'+runwayDays+' days runway</span>'
-    : (aic.dailyAverage > 0 ? ' · <span style="color:var(--orange)">over budget pace</span>' : '');
-  const overCredits = aic.totalCredits - aic.monthlyBudget;
+  const runwayBadge = !aicRangeIsLive
+    ? ' · <span style="color:var(--muted)">closed period</span>'
+    : runwayDays > 0
+      ? ' · <span style="color:var(--green)">~'+runwayDays+' days runway</span>'
+      : (rangeDailyAvg > 0 ? ' · <span style="color:var(--orange)">over budget pace</span>' : '');
+  const overCredits = rangeTotal - aic.monthlyBudget;
   const pctLabel = pctActual > 100
     ? '<span style="font-weight:700;color:var(--red)" title="'+overCredits.toFixed(1)+' credits over '+aic.monthlyBudget+' budget">'+pctActual+'% <span style="font-weight:500;font-size:10px;opacity:0.85">(+'+(pctActual-100)+'% over)</span></span>'
     : '<span style="font-weight:600;color:var(--fg)">'+pctActual+'%</span>';
   const budgetBar = aic.monthlyBudget > 0
-    ? '<div style="margin:14px 0"><div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:6px"><span>'+aic.totalCredits.toFixed(1)+' / '+aic.monthlyBudget+' credits used'+( isPromo ? ' (promo)' : '')+runwayBadge+'</span>'+pctLabel+'</div><div class="budget-bar"><div class="fill" style="width:'+pct+'%;background:'+barColor+'"></div></div></div>'
+    ? '<div style="margin:14px 0"><div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:6px"><span>'+rangeTotal.toFixed(1)+' / '+aic.monthlyBudget+' credits used'+( isPromo ? ' (promo)' : '')+runwayBadge+'</span>'+pctLabel+'</div><div class="budget-bar"><div class="fill" style="width:'+pct+'%;background:'+barColor+'"></div></div></div>'
     : '';
 
-  // Stats row — removed Output Credits, Cache Savings, Remaining (always 0 without cache data from API)
+  // Stats row — uses range-filtered values.
+  // For historical ranges we cannot compute input/output/cached credit split
+  // (that data only exists in aic.byModel for the current cycle), so we show
+  // prompt-token volume instead — always accurate and derived from sessions.
+  const rangePromptTokens = filteredSessions.reduce((s,x) => s + (x.actualPrompt||x.prompt||0), 0);
+  const projectedSub = aicRangeIsLive ? 'end of cycle' : 'range total (closed)';
   const statsCards = [
-    {l:'Total Credits',v:aic.totalCredits.toFixed(1),s:planLabel+' plan',c:'orange'},
-    {l:'Input Credits',v:aic.inputCredits.toFixed(1),s:'prompt tokens'},
-    {l:'Daily Avg',v:aic.dailyAverage.toFixed(1),s:'credits/day'},
-    {l:'Projected',v:aic.projectedTotal.toFixed(0),s:'end of cycle',c:projPct>=100?'red':projPct>=80?'orange':''},
+    {l:'Total Credits',v:rangeTotal.toFixed(1),s:planLabel+' plan',c:'orange'},
+    {l:'Prompt Tokens',v:fmt(rangePromptTokens),s:'input to models'},
+    {l:'Daily Avg',v:rangeDailyAvg.toFixed(1),s:activeDayCount+' active day'+(activeDayCount===1?'':'s')},
+    {l:'Projected',v:rangeProjected.toFixed(0),s:projectedSub,c:aicRangeIsLive && projPct>=100?'red':aicRangeIsLive && projPct>=80?'orange':''},
   ];
 
-  // Overage card(s): show both with and without promo during promo period
+  // Overage card(s): recalculate from range-filtered total
   let overageHTML = '';
+  const overageCost = aic.config ? aic.config.overageCostPerCredit : 0.01;
   if (isPromo) {
+    const rangeOverageWithPromo = Math.max(0, rangeTotal - promo.promoBudget) * overageCost;
+    const rangeOverageWithoutPromo = Math.max(0, rangeTotal - (promo.standardBudget||0)) * overageCost;
+    const rangePromoSavings = rangeOverageWithoutPromo - rangeOverageWithPromo;
     overageHTML = '<div class="stats-row" style="margin-top:8px">'
-      + '<div class="stat-card" style="border-left:3px solid var(--green)"><div class="label">Overage (With Promo)</div><div class="value'+(promo.overageWithPromo > 0?' red':'')+'">$'+promo.overageWithPromo.toFixed(2)+'</div><div class="sub">budget: '+promo.promoBudget+' credits</div></div>'
-      + '<div class="stat-card" style="border-left:3px solid var(--orange)"><div class="label">Overage (Without Promo)</div><div class="value'+(promo.overageWithoutPromo > 0?' red':'')+'">$'+promo.overageWithoutPromo.toFixed(2)+'</div><div class="sub">standard: '+promo.standardBudget+' credits</div></div>'
-      + '<div class="stat-card" style="border-left:3px solid var(--green)"><div class="label">Promo Savings</div><div class="value green">$'+(promo.overageWithoutPromo - promo.overageWithPromo).toFixed(2)+'</div><div class="sub">ends '+promo.promoEndDate+'</div></div>'
+      + '<div class="stat-card" style="border-left:3px solid var(--green)"><div class="label">Overage (With Promo)</div><div class="value'+(rangeOverageWithPromo > 0?' red':'')+'">$'+rangeOverageWithPromo.toFixed(2)+'</div><div class="sub">budget: '+promo.promoBudget+' credits</div></div>'
+      + '<div class="stat-card" style="border-left:3px solid var(--orange)"><div class="label">Overage (Without Promo)</div><div class="value'+(rangeOverageWithoutPromo > 0?' red':'')+'">$'+rangeOverageWithoutPromo.toFixed(2)+'</div><div class="sub">standard: '+(promo.standardBudget||0)+' credits</div></div>'
+      + '<div class="stat-card" style="border-left:3px solid var(--green)"><div class="label">Promo Savings</div><div class="value green">$'+rangePromoSavings.toFixed(2)+'</div><div class="sub">ends '+promo.promoEndDate+'</div></div>'
       + '</div>';
   } else {
+    const rangeOverage = Math.max(0, rangeTotal - aic.monthlyBudget) * overageCost;
     overageHTML = '<div class="stats-row" style="margin-top:8px">'
-      + '<div class="stat-card"><div class="label">Overage Cost</div><div class="value'+(aic.estimatedOverageCost > 0?' red':'')+'">$'+aic.estimatedOverageCost.toFixed(2)+'</div><div class="sub">@ $'+aic.config.overageCostPerCredit+'/credit</div></div>'
+      + '<div class="stat-card"><div class="label">Overage Cost</div><div class="value'+(rangeOverage > 0?' red':'')+'">$'+rangeOverage.toFixed(2)+'</div><div class="sub">@ $'+overageCost+'/credit</div></div>'
       + '</div>';
   }
 
-  // Model breakdown table
+  // Model breakdown table — computed from range-filtered sessions.
+  // For the current billing cycle we have per-request input/output/cached
+  // splits (in aic.byModel). For historical ranges we only have session-level
+  // total credits — so we render em-dash in the split columns to avoid showing
+  // misleading 0.00 values.
+  const useOriginalByModel = !bounds.start || (bounds.start <= aic.billingCycleStart && (!bounds.end || bounds.end >= aic.billingCycleEnd));
   let modelRows = '';
-  (aic.byModel||[]).forEach(m => {
-    const tierBadge = m.tier === 'premium' ? '<span class="mult-badge mult-high">premium</span>' : m.tier === 'base' ? '<span class="mult-badge mult-1">base</span>' : '<span class="mult-badge">custom</span>';
-    modelRows += '<tr><td><span class="model-tag '+mc(m.model)+'">'+esc(m.model)+'</span> '+tierBadge+'</td><td class="num">'+m.inputCredits.toFixed(2)+'</td><td class="num">'+m.outputCredits.toFixed(2)+'</td><td class="num cached">'+m.cachedCredits.toFixed(2)+'</td><td class="num orange">'+m.totalCredits.toFixed(2)+'</td></tr>';
-  });
+  if (useOriginalByModel) {
+    (aic.byModel||[]).forEach(m => {
+      const tierBadge = m.tier === 'premium' ? '<span class="mult-badge mult-high">premium</span>' : m.tier === 'base' ? '<span class="mult-badge mult-1">base</span>' : '<span class="mult-badge">custom</span>';
+      modelRows += '<tr><td><span class="model-tag '+mc(m.model)+'">'+esc(m.model)+'</span> '+tierBadge+'</td><td class="num">'+m.inputCredits.toFixed(2)+'</td><td class="num">'+m.outputCredits.toFixed(2)+'</td><td class="num cached">'+m.cachedCredits.toFixed(2)+'</td><td class="num orange">'+m.totalCredits.toFixed(2)+'</td></tr>';
+    });
+  } else {
+    // Historical range: aggregate session credits by model, no split available
+    const modelTotals = {};
+    const tierMap = {};
+    (aic.byModel||[]).forEach(bm => { tierMap[bm.model] = bm.tier; });
+    filteredSessions.forEach(s => {
+      const m = s.model || s.modelName || 'unknown';
+      modelTotals[m] = (modelTotals[m] || 0) + (s.aicCredits || 0);
+    });
+    Object.entries(modelTotals)
+      .filter(([,total]) => total > 0)
+      .sort((a,b) => b[1] - a[1])
+      .forEach(([m, total]) => {
+        const tier = tierMap[m] || '';
+        const tierBadge = tier === 'premium' ? '<span class="mult-badge mult-high">premium</span>' : tier === 'base' ? '<span class="mult-badge mult-1">base</span>' : '<span class="mult-badge">custom</span>';
+        modelRows += '<tr><td><span class="model-tag '+mc(m)+'">'+esc(m)+'</span> '+tierBadge+'</td><td class="num" style="color:var(--muted)">—</td><td class="num" style="color:var(--muted)">—</td><td class="num" style="color:var(--muted)">—</td><td class="num orange">'+total.toFixed(2)+'</td></tr>';
+      });
+  }
 
-  // Daily credits calendar for current billing month
-  const dayMap = {};
-  (aic.byDay||[]).forEach(d => { dayMap[d.day] = d.credits; });
-  const calendarHTML = buildCreditCalendar(aic.billingCycleStart, aic.billingCycleEnd, dayMap);
+  // Daily credits calendar — finalDayMap built above already merges aic.byDay
+  // (authoritative, current cycle) with session-derived data (any month).
+  const calStart = bounds.start || aic.billingCycleStart;
+  const calEnd = bounds.end || aic.billingCycleEnd;
+  const calendarHTML = buildCreditCalendar(calStart, calEnd, finalDayMap);
 
   // Estimation note
   const cacheNote = aic.isActualFromApi
@@ -912,12 +1032,19 @@ function renderAIC(aic) {
     + '</div>';
 }
 
-function renderAgentSessions(agent) {
+function renderAgentSessions(agent, bounds, filteredSessions) {
   const el = document.getElementById('agent-section');
   if (!agent) { el.innerHTML = ''; return; }
 
   // fmt helpers — inline since they're one-off and used only here
   const fmtAIC = v => (+v).toFixed(2);
+
+  // Range-filtered VS Code values from sessions
+  const vscodeSessions = filteredSessions.length;
+  const vscodeTurns = filteredSessions.reduce((s,x) => s + x.turns, 0);
+  const vscodeTotalTokens = filteredSessions.reduce((s,x) => s + (x.actualPrompt||x.prompt) + (x.actualOutput||x.output), 0);
+  const vscodeAicCredits = filteredSessions.reduce((s,x) => s + (x.aicCredits||0), 0);
+
   const cliDisplayCredits = (agent.cliTotalCredits && agent.cliTotalCredits > 0)
     ? agent.cliTotalCredits
     : (agent.cliLlmCalls && agent.cliLlmCalls > 0 ? agent.cliLlmCalls : 0);
@@ -951,12 +1078,19 @@ function renderAgentSessions(agent) {
       ' · home <code>' + esc(agent.cliCopilotHome || '~/.copilot') + '</code></div>'
     : '';
 
-  // Total row values — CLI prompts count as LLM calls, CLI live output
-  // tokens count toward the token volume so the Total column reconciles.
-  const totalSess  = agent.totalSessions;
-  const totalCalls = (agent.vscodeTurns||0) + (agent.ompLlmCalls||0) + (agent.piLlmCalls||0) + (agent.cliLlmCalls||0);
-  const totalTok   = (agent.vscodeTotalTokens||0) + (agent.ompAllTimeTokens||0) + (agent.piAllTimeTokens||0) + (agent.cliAllTimeTokens||0);
-  const totalAIC   = fmtAIC(agent.totalCredits||0);
+  // Total row values — VS Code is range-filtered; OMP/Pi/CLI are all-time
+  // because those scanners don't expose per-date granularity to the webview.
+  // We DO NOT sum them into a single Total — mixing a filtered window with
+  // all-time data would be misleading. Show em-dash placeholder for Total when
+  // any range other than all-time is selected.
+  const isAllTimeRange = !bounds.start && !bounds.end;
+  const totalSess  = vscodeSessions + (agent.ompSessions||0) + (agent.piSessions||0) + (agent.cliSessions||0);
+  const totalCalls = vscodeTurns + (agent.ompLlmCalls||0) + (agent.piLlmCalls||0) + (agent.cliLlmCalls||0);
+  const totalTok   = vscodeTotalTokens + (agent.ompAllTimeTokens||0) + (agent.piAllTimeTokens||0) + (agent.cliAllTimeTokens||0);
+  const totalAIC   = fmtAIC(vscodeAicCredits + (agent.ompTotalCredits||0) + (agent.piTotalCredits||0) + cliDisplayCredits);
+  const totalCell = v => isAllTimeRange
+    ? '<td class="num orange"><strong>'+v+'</strong></td>'
+    : '<td class="num" style="color:var(--muted)" title="VS Code is range-filtered; OMP/Pi/CLI are all-time — a combined total would mix time windows">—</td>';
 
   const fmtTok = v => {
     if (v >= 1e9) return (v/1e9).toFixed(2)+'B';
@@ -973,35 +1107,35 @@ function renderAgentSessions(agent) {
   const tbody =
     '<tr>' +
       '<td>Sessions</td>' +
-      '<td class="num">'+agent.vscodeSessions+'</td>' +
+      '<td class="num">'+vscodeSessions+'</td>' +
       '<td class="num">'+(agent.ompSessions||0)+'</td>' +
       '<td class="num">'+(agent.piSessions||0)+'</td>' +
       '<td class="num">'+(agent.cliSessions||0)+'</td>' +
-      '<td class="num orange"><strong>'+totalSess+'</strong></td>' +
+      totalCell(totalSess) +
     '</tr>' +
     '<tr>' +
       '<td>Turns / LLM Calls / Prompts</td>' +
-      '<td class="num">'+(agent.vscodeTurns||0).toLocaleString()+'</td>' +
+      '<td class="num">'+vscodeTurns.toLocaleString()+'</td>' +
       '<td class="num">'+(agent.ompLlmCalls||0).toLocaleString()+'</td>' +
       '<td class="num">'+(agent.piLlmCalls||0).toLocaleString()+'</td>' +
       '<td class="num" title="User prompts in the billing window (slash commands excluded)">'+(agent.cliLlmCalls||0).toLocaleString()+'</td>' +
-      '<td class="num orange"><strong>'+totalCalls.toLocaleString()+'</strong></td>' +
+      totalCell(totalCalls.toLocaleString()) +
     '</tr>' +
     '<tr>' +
-      '<td>Tokens — prompt + output <span style="font-size:10px;color:var(--muted)">(VS Code: workspace storage · OMP/Pi/CLI: all time)</span></td>' +
-      '<td class="num" title="All turns retained in VS Code workspace storage">'+fmtTok(agent.vscodeTotalTokens||0)+'</td>' +
+      '<td>Tokens — prompt + output <span style="font-size:10px;color:var(--muted)">(VS Code: range filtered · OMP/Pi/CLI: all time)</span></td>' +
+      '<td class="num" title="Tokens from range-filtered VS Code sessions">'+fmtTok(vscodeTotalTokens)+'</td>' +
       '<td class="num" title="All-time historical OMP agent tokens">'+fmtTok(agent.ompAllTimeTokens||0)+'</td>' +
       '<td class="num" title="All-time historical Pi agent tokens">'+fmtTok(agent.piAllTimeTokens||0)+'</td>' +
       '<td class="num" title="All-time CLI live output tokens (from assistant.message events)">'+fmtTok(agent.cliAllTimeTokens||0)+'</td>' +
-      '<td class="num orange" title="Sum across differing retention windows — see column headers"><strong>'+fmtTok(totalTok)+'</strong></td>' +
+      totalCell(fmtTok(totalTok)) +
     '</tr>' +
     '<tr style="border-top:1px solid var(--border)">' +
       '<td><strong>AIC Credits</strong> <span style="font-size:10px;color:var(--muted)">(Jun 1+ only)</span></td>' +
-      '<td class="num orange">'+fmtAIC(agent.vscodeAicCredits||0)+'</td>' +
+      '<td class="num orange">'+fmtAIC(vscodeAicCredits)+'</td>' +
       '<td class="num orange">'+fmtAIC(agent.ompTotalCredits||0)+'</td>' +
       '<td class="num orange">'+fmtAIC(agent.piTotalCredits||0)+'</td>' +
       '<td class="num orange" title="API-billed totalNanoAiu from session.shutdown when present, else prompts × multiplier while live">'+fmtAIC(cliDisplayCredits)+'</td>' +
-      '<td class="num orange"><strong>'+totalAIC+'</strong></td>' +
+      totalCell(totalAIC) +
     '</tr>';
 
   el.innerHTML = '<div class="table-card source-usage"><div class="section-head">'

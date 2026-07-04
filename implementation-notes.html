@@ -732,5 +732,39 @@ contract for the user's "I have BYOK plus Copilot" mixed environment.</p>
   not <code>0.00</code>).</li>
 </ul>
 
+<h2>Bug Fix: Missing <code>session_start</code> in Debug Logs (2026-07-04)</h2>
+
+<h3>Symptom</h3>
+<p>Dashboard showed <strong>5,378 credits</strong> for the July billing cycle, but raw
+debug-log analysis found <strong>10,371 credits</strong> — a <strong>1.93× drift</strong>.</p>
+
+<h3>Root Cause</h3>
+<p>Session <code>e9525e02</code> (244 MB debug-log, 213 <code>llm_request</code> entries, 6,135 credits)
+had <strong>zero <code>session_start</code></strong> entries in its <code>main.jsonl</code>.
+This happens when VS Code reloads/restarts mid-session — the debug-log continues
+appending to the same file but the new process doesn't re-emit <code>session_start</code>.</p>
+
+<p><code>parseDebugLogLines()</code> only extracted <code>sessionId</code> from
+<code>type === "session_start"</code> entries. When none existed, <code>sessionId</code>
+stayed <code>""</code>, triggering the early-return:</p>
+<pre>if (!sessionId || totalLlmCalls === 0) { return null; }</pre>
+<p>This silently dropped the entire debug-log from <code>debugLogMap</code>, so the session's
+turns were never enriched with token/AIC data.</p>
+
+<h3>Fix</h3>
+<p>Added a fallback in the parsing loop: extract <code>sid</code> from <strong>any</strong> entry type
+when <code>sessionId</code> is still empty. The <code>sid</code> field is present on
+<code>turn_end</code>, <code>agent_response</code>, <code>llm_request</code>, and other events:</p>
+<pre>} else if (!sessionId && typeof entry.sid === "string" && entry.sid) {
+  sessionId = entry.sid;
+}</pre>
+
+<h3>Impact</h3>
+<ul>
+  <li>Drift reduced from <strong>1.93×</strong> to <strong>0.99×</strong> (remaining 1% is expected live OTel activity)</li>
+  <li>Single-line fix in <code>src/scanner.ts</code></li>
+  <li>No change to dashboard rendering or AIC calculation logic</li>
+</ul>
+
 </body>
 </html>
