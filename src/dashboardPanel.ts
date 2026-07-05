@@ -222,6 +222,7 @@ td { padding: 8px; border-bottom: 1px solid var(--border); font-size: 12px; }
 .hero-card.accent-orange::before { background: var(--orange); }
 .hero-card.accent-green::before { background: var(--green); }
 .hero-card.accent-purple::before { background: var(--purple); }
+.hero-card.accent-red::before { background: var(--red); }
 .hero-card .h-label { font-size: 10px; text-transform: uppercase; color: var(--muted); letter-spacing: 0.6px; margin-bottom: 6px; font-weight: 600; }
 .hero-card .h-value { font-size: 28px; font-weight: 700; line-height: 1.1; letter-spacing: -0.5px; }
 .hero-card .h-sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
@@ -644,21 +645,46 @@ function render() {
   const tokensTotal = t.prompt + t.output;
   const tokensPerTurn = t.turns > 0 ? fmt(Math.round(tokensTotal/t.turns)) : '0';
 
+  // === HERO KPIs (redesigned v1.10.26) ===
+  // Removed duplicates: "Tokens Processed" (was just Prompt+Output shown below),
+  // and Activity subtitle "N tool calls · M subagents" (was duplicating More
+  // Details tiles). New card set surfaces the money numbers the user actually
+  // cares about — spend, overage, pace, projection — all range-scoped and
+  // consistent (sum reconciles across the whole page).
+  const promo = DATA.aicSummary?.promo || {};
+  const isPromo = promo.isPromoActive && promo.promoBudget > 0;
+  const overageCost = DATA.aicSummary?.config?.overageCostPerCredit ?? 0.01;
+  const effectiveBudget = isPromo ? promo.promoBudget : (DATA.aicSummary?.monthlyBudget || 0);
+  const rangeOverageDollars = effectiveBudget > 0
+    ? Math.max(0, rangeAicTotal - effectiveBudget) * overageCost
+    : 0;
+  const overageLabel = isPromo ? 'Overage (with promo)' : 'Overage';
+  const overageSub = effectiveBudget > 0
+    ? '@ $' + overageCost + '/credit over ' + effectiveBudget + ' budget'
+    : 'no budget set';
+  const paceSub = heroActiveDayCount + ' active day' + (heroActiveDayCount === 1 ? '' : 's');
+  const projectedValue = rangeIsLive ? Math.round(heroProjected).toLocaleString() : rangeAicTotal.toFixed(0);
+  const projectedSub = rangeIsLive ? 'end of cycle' : 'range total (closed)';
+  const projectedAccent = rangeIsLive && projPct >= 100 ? 'orange' : rangeIsLive && projPct >= 80 ? 'orange' : 'green';
+
   document.getElementById('hero-stats').innerHTML = [
-    {l:'AI Credits Spent', v:aicTotal, sub: runwayTxt || aicSrcSub, accent:'orange', delta:spendDelta},
-    {l:'Sessions',         v:t.sessions.toLocaleString(), sub: rl, accent:'', delta:'<span class="h-delta up">'+turnsPerSess+' turns/session</span>'},
-    {l:'Tokens Processed', v:fmt(tokensTotal), sub:'prompt + output', accent:'purple', delta:'<span class="h-delta up">'+tokensPerTurn+' avg/turn</span>'},
-    {l:'Activity',         v:t.turns.toLocaleString()+' turns', sub: fmt(t.tools)+' tool calls · '+t.subs+' subagents', accent:'green', delta:''},
+    {l:'AI Credits Spent', v:aicTotal,                              sub: rl + ' · ' + t.sessions + ' sessions · ' + t.turns + ' turns', accent:'orange', delta:spendDelta},
+    {l:overageLabel,       v:'$'+rangeOverageDollars.toFixed(2),    sub: overageSub, accent:'red', delta:''},
+    {l:'Daily Pace',       v:Math.round(heroDailyAvg).toLocaleString(), sub: paceSub, accent:'', delta:'<span class="h-delta up">'+turnsPerSess+' turns/sess · '+tokensPerTurn+' tok/turn</span>'},
+    {l:'Projected',        v:projectedValue,                        sub: projectedSub, accent:projectedAccent, delta:''},
   ].map(c=>'<div class="hero-card'+(c.accent?' accent-'+c.accent:'')+'"><div class="h-label">'+c.l+'</div><div class="h-value">'+c.v+'</div><div class="h-sub">'+c.sub+'</div>'+(c.delta||'')+'</div>').join('');
 
-  // === Secondary KPIs (collapsed by default) ===
+  // === Secondary metrics (Prompt/Output/Tools/Subagents — kept here but the
+  // authoritative TOTAL row also appears in Usage-by-Model. Mirrors/Transcripts
+  // are internal scan diagnostics and belong under a "Diagnostics" collapsed
+  // section, not the KPI grid.
   const detailsCards = [
-    {l:'Prompt Tokens', v:fmt(t.prompt), s:'actual API usage'},
+    {l:'Prompt Tokens', v:fmt(t.prompt), s:'input to models'},
     {l:'Output Tokens', v:fmt(t.output), s:'generated tokens'},
     {l:'Tool Calls',    v:fmt(t.tools), s:'all tool invocations'},
     {l:'Subagent Calls',v:t.subs, s:'runSubagent only'},
-    {l:'Mirrors',       v:DATA.scanStats.mirroredSessions, s:DATA.scanStats.mirrorCopiesPruned+' pruned'},
-    {l:'Transcripts',   v:DATA.scanStats.transcriptsFound, s:DATA.scanStats.promptPreviews+' with previews'},
+    {l:'Mirrors',       v:DATA.scanStats.mirroredSessions, s:DATA.scanStats.mirrorCopiesPruned+' pruned · diagnostic'},
+    {l:'Transcripts',   v:DATA.scanStats.transcriptsFound, s:DATA.scanStats.promptPreviews+' with previews · diagnostic'},
   ];
   document.getElementById('stats-row').innerHTML = detailsCards.map(c=>'<div class="stat-card"><div class="label">'+c.l+'</div><div class="value">'+c.v+'</div><div class="sub">'+c.s+'</div></div>').join('');
   const dBadge = document.getElementById('details-badge');
@@ -1149,10 +1175,10 @@ function renderAgentSessions(agent, bounds, filteredSessions) {
     + '</div>'
     + '<table><thead><tr>'
     +   '<th>Metric</th>'
-    +   '<th class="num">VS Code</th>'
-    +   '<th class="num">Oh My Pi</th>'
-    +   '<th class="num">Pi</th>'
-    +   '<th class="num">Copilot CLI</th>'
+    +   '<th class="num" title="Range-filtered per current selection">VS Code <span style="font-size:9px;color:var(--muted);font-weight:400">(range)</span></th>'
+    +   '<th class="num" title="All-time — OMP scanner doesn\'t expose per-date data to the webview">Oh My Pi <span style="font-size:9px;color:var(--muted);font-weight:400">(all time)</span></th>'
+    +   '<th class="num" title="All-time — Pi scanner doesn\'t expose per-date data to the webview">Pi <span style="font-size:9px;color:var(--muted);font-weight:400">(all time)</span></th>'
+    +   '<th class="num" title="All-time — CLI scanner doesn\'t expose per-date data to the webview">Copilot CLI <span style="font-size:9px;color:var(--muted);font-weight:400">(all time)</span></th>'
     +   '<th class="num">Total</th>'
     + '</tr></thead><tbody>'
     + tbody
@@ -1313,11 +1339,21 @@ function renderModelTable(sessions) {
   });
   const sorted=Object.values(m).sort((a,b)=>b.credits-a.credits || (b.prompt+b.output)-(a.prompt+a.output));
   let rows='';
+  const totals = {sessions:new Set(), turns:0, prompt:0, output:0, tools:0, subs:0, credits:0};
   sorted.forEach(m=>{
     const credits = m.credits > 0 ? m.credits.toFixed(2) : '—';
     rows+='<tr><td><span class="model-tag '+mc(m.model)+'">'+esc(m.model)+'</span></td><td class="num">'+m.mult+'x</td><td class="num">'+m.sessions.size+'</td><td class="num">'+m.turns+'</td><td class="num">'+fmt(m.prompt)+'</td><td class="num">'+fmt(m.output)+'</td><td class="num">'+fmt(m.tools)+'</td><td class="num">'+m.subs+'</td><td class="num orange">'+credits+'</td></tr>';
+    m.sessions.forEach(id=>totals.sessions.add(id));
+    totals.turns+=m.turns; totals.prompt+=m.prompt; totals.output+=m.output;
+    totals.tools+=m.tools; totals.subs+=m.subs; totals.credits+=m.credits;
   });
-  el.innerHTML='<div class="table-card"><div class="section-title">Usage by Model <span style="font-size:10px;color:var(--muted);font-weight:400;text-transform:none">(per session-primary-model \u2014 credits sum matches hero total)</span></div><table><thead><tr><th>Model</th><th class="num">Multiplier</th><th class="num">Sessions</th><th class="num">Turns</th><th class="num">Prompt</th><th class="num">Output</th><th class="num">Tools</th><th class="num">Subagents</th><th class="num">AI Credits</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+  // Authoritative TOTAL row — its Credits MUST equal the hero "AI Credits Spent"
+  // (both are Σ session.aicCredits over the filtered range). If they diverge,
+  // a bug has been introduced upstream.
+  if (sorted.length > 0) {
+    rows+='<tr style="border-top:2px solid var(--border);font-weight:600;background:rgba(255,255,255,0.02)"><td>TOTAL</td><td class="num">—</td><td class="num">'+totals.sessions.size+'</td><td class="num">'+totals.turns+'</td><td class="num">'+fmt(totals.prompt)+'</td><td class="num">'+fmt(totals.output)+'</td><td class="num">'+fmt(totals.tools)+'</td><td class="num">'+totals.subs+'</td><td class="num orange">'+totals.credits.toFixed(2)+'</td></tr>';
+  }
+  el.innerHTML='<div class="table-card"><div class="section-title">Usage by Model <span style="font-size:10px;color:var(--muted);font-weight:400;text-transform:none">(per session-primary-model \u2014 TOTAL row reconciles with hero)</span></div><table><thead><tr><th>Model</th><th class="num">Multiplier</th><th class="num">Sessions</th><th class="num">Turns</th><th class="num">Prompt</th><th class="num">Output</th><th class="num">Tools</th><th class="num">Subagents</th><th class="num">AI Credits</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
 }
 
 function renderSubagents(subs) {

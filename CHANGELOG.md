@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.26] - 2026-07-04
+
+### Changed
+
+- **Redesigned hero cards** — replaced the duplicate `Tokens Processed` and `Activity` cards (which mirrored More Details tiles) with money-focused KPIs: `AI Credits Spent`, `Overage`, `Daily Pace`, `Projected`. Every value is range-scoped and consistent with the rest of the page. Sessions/turns/tokens folded into subtitles or the Usage-by-Model TOTAL row.
+- **Usage-by-Model TOTAL row** — new bottom row sums all per-model rows. Its `AI Credits` cell MUST equal the hero `AI Credits Spent`; the two are computed from the same `Σ session.aicCredits` formula. Any future divergence between them signals a bug.
+- **Usage by Source column headers annotated** — each source column now shows `(range)` or `(all time)` inline so users can see at a glance which columns respect the Range filter and which don't (VS Code is range-filtered; OMP / Pi / CLI are all-time until those scanners expose per-date data).
+- **Mirrors / Transcripts labeled as diagnostics** — kept in More Details but sub-text now says "diagnostic" so users know these are internal scanner metrics, not user-actionable KPIs.
+
 ## [1.10.25] - 2026-07-04
 
 ### Fixed
