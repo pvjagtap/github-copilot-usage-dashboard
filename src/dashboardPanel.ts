@@ -1176,9 +1176,9 @@ function renderAgentSessions(agent, bounds, filteredSessions) {
     + '<table><thead><tr>'
     +   '<th>Metric</th>'
     +   '<th class="num" title="Range-filtered per current selection">VS Code <span style="font-size:9px;color:var(--muted);font-weight:400">(range)</span></th>'
-    +   '<th class="num" title="All-time — OMP scanner doesn\'t expose per-date data to the webview">Oh My Pi <span style="font-size:9px;color:var(--muted);font-weight:400">(all time)</span></th>'
-    +   '<th class="num" title="All-time — Pi scanner doesn\'t expose per-date data to the webview">Pi <span style="font-size:9px;color:var(--muted);font-weight:400">(all time)</span></th>'
-    +   '<th class="num" title="All-time — CLI scanner doesn\'t expose per-date data to the webview">Copilot CLI <span style="font-size:9px;color:var(--muted);font-weight:400">(all time)</span></th>'
+    +   '<th class="num" title="All-time — OMP scanner does not expose per-date data to the webview">Oh My Pi <span style="font-size:9px;color:var(--muted);font-weight:400">(all time)</span></th>'
+    +   '<th class="num" title="All-time — Pi scanner does not expose per-date data to the webview">Pi <span style="font-size:9px;color:var(--muted);font-weight:400">(all time)</span></th>'
+    +   '<th class="num" title="All-time — CLI scanner does not expose per-date data to the webview">Copilot CLI <span style="font-size:9px;color:var(--muted);font-weight:400">(all time)</span></th>'
     +   '<th class="num">Total</th>'
     + '</tr></thead><tbody>'
     + tbody

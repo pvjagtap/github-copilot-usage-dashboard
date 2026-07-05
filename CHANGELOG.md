@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.27] - 2026-07-04
+
+### Fixed
+
+- **CRITICAL: v1.10.26 dashboard rendered completely blank.** The `Usage by Source` column-header title attributes added in v1.10.26 contained `doesn\'t` — a backslash-single-quote sequence that TypeScript's template-literal processor stripped to `doesn't`, producing literal `'...doesn't...'` in the emitted webview JS. The unescaped apostrophe terminated the string, syntax-erroring the entire script and leaving the dashboard blank. Replaced with `does not`. Extension activation, scanning, and sidebar continued to work throughout — only the main dashboard webview was affected.
+
 ## [1.10.26] - 2026-07-04
 
 ### Changed
