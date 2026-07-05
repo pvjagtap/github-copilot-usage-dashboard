@@ -1294,36 +1294,30 @@ function renderModelTable(sessions) {
   const m={};
   sessions.forEach(s=>{
     const k=s.modelName;
-    // Track BOTH display label (for table) and family identifier (for AIC join).
-    // s.model carries modelFamily from VS Code metadata — e.g. "claude-opus-4.6" —
-    // which is exactly the key aicSummary.byModel uses. Joining on family is
-    // bulletproof; trying to normalize the display label was fragile.
-    if(!m[k]){m[k]={model:k,family:s.model||'',mult:getMult(k,s.multiplier),sessions:new Set(),turns:0,prompt:0,output:0,tools:0,subs:0};}else{const sm=getMult(k,s.multiplier);if(sm>m[k].mult)m[k].mult=sm; if(!m[k].family && s.model) m[k].family=s.model;}
-    m[k].sessions.add(s.sessionId);m[k].turns+=s.turns;m[k].prompt+=(s.actualPrompt||s.prompt);m[k].output+=(s.actualOutput||s.output);m[k].tools+=s.toolCalls;m[k].subs+=s.subagents;
+    // Aggregate per session-primary-model. AI Credits are summed from each
+    // session's aicCredits (which already includes all sub-model calls made
+    // during that session — title-gen, subagents, model-change turns).
+    // Previously this joined against aicSummary.byModel which keys on the
+    // API-called model, not session-primary-model — that mismatch caused the
+    // ~83-credit visible drift (opus-4.6 row showed 15,072 but the session
+    // total was 15,155 because ~83 credits were from other models used
+    // inside opus-4.6 sessions).
+    if(!m[k]){m[k]={model:k,mult:getMult(k,s.multiplier),sessions:new Set(),turns:0,prompt:0,output:0,tools:0,subs:0,credits:0};}else{const sm=getMult(k,s.multiplier);if(sm>m[k].mult)m[k].mult=sm;}
+    m[k].sessions.add(s.sessionId);
+    m[k].turns+=s.turns;
+    m[k].prompt+=(s.actualPrompt||s.prompt);
+    m[k].output+=(s.actualOutput||s.output);
+    m[k].tools+=s.toolCalls;
+    m[k].subs+=s.subagents;
+    m[k].credits+=(s.aicCredits||0);
   });
-  const sorted=Object.values(m).sort((a,b)=>(b.prompt+b.output)-(a.prompt+a.output));
-  // Build lookup keyed by lowercased family identifier (what aicSummary.byModel uses).
-  // Also normalize "claude-opus-4-6" → "claude-opus-4.6" because OTel attributes
-  // sometimes strip the dot in version separators.
-  const normFamily = (name) => String(name||'').toLowerCase().replace(/(\d)-(\d)/g,'$1.$2');
-  const aicByModel = {};
-  if (DATA.aicSummary && DATA.aicSummary.byModel) {
-    DATA.aicSummary.byModel.forEach(am => { aicByModel[normFamily(am.model)] = am; });
-  }
+  const sorted=Object.values(m).sort((a,b)=>b.credits-a.credits || (b.prompt+b.output)-(a.prompt+a.output));
   let rows='';
   sorted.forEach(m=>{
-    // Lookup priority: 1) family identifier (authoritative), 2) family-style normalization of display label (fallback for sessions with empty modelFamily).
-    let aicModel = m.family ? (aicByModel[normFamily(m.family)] || null) : null;
-    if (!aicModel) {
-      const labelAsFamily = String(m.model||'').toLowerCase().replace(/[\s_]+/g,'-').replace(/(\d)-(\d)/g,'$1.$2');
-      aicModel = aicByModel[labelAsFamily] || null;
-    }
-    const credits = aicModel ? aicModel.totalCredits.toFixed(2) : '—';
-    const tier = aicModel ? aicModel.tier : '';
-    const tierBadge = tier === 'premium' ? ' <span class="mult-badge mult-high">P</span>' : tier === 'base' ? ' <span class="mult-badge mult-1">B</span>' : '';
-    rows+='<tr><td><span class="model-tag '+mc(m.model)+'">'+esc(m.model)+'</span>'+tierBadge+'</td><td class="num">'+m.mult+'x</td><td class="num">'+m.sessions.size+'</td><td class="num">'+m.turns+'</td><td class="num">'+fmt(m.prompt)+'</td><td class="num">'+fmt(m.output)+'</td><td class="num">'+fmt(m.tools)+'</td><td class="num">'+m.subs+'</td><td class="num orange">'+credits+'</td></tr>';
+    const credits = m.credits > 0 ? m.credits.toFixed(2) : '—';
+    rows+='<tr><td><span class="model-tag '+mc(m.model)+'">'+esc(m.model)+'</span></td><td class="num">'+m.mult+'x</td><td class="num">'+m.sessions.size+'</td><td class="num">'+m.turns+'</td><td class="num">'+fmt(m.prompt)+'</td><td class="num">'+fmt(m.output)+'</td><td class="num">'+fmt(m.tools)+'</td><td class="num">'+m.subs+'</td><td class="num orange">'+credits+'</td></tr>';
   });
-  el.innerHTML='<div class="table-card"><div class="section-title">Usage by Model</div><table><thead><tr><th>Model</th><th class="num">Multiplier</th><th class="num">Sessions</th><th class="num">Turns</th><th class="num">Prompt</th><th class="num">Output</th><th class="num">Tools</th><th class="num">Subagents</th><th class="num">AI Credits</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+  el.innerHTML='<div class="table-card"><div class="section-title">Usage by Model <span style="font-size:10px;color:var(--muted);font-weight:400;text-transform:none">(per session-primary-model \u2014 credits sum matches hero total)</span></div><table><thead><tr><th>Model</th><th class="num">Multiplier</th><th class="num">Sessions</th><th class="num">Turns</th><th class="num">Prompt</th><th class="num">Output</th><th class="num">Tools</th><th class="num">Subagents</th><th class="num">AI Credits</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
 }
 
 function renderSubagents(subs) {

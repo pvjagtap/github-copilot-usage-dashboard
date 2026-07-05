@@ -5,7 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.10.25] - 2026-07-04
+
+### Fixed
+
+- **Usage by Model table showed wrong AI Credits** — the AI Credits column joined session-primary-model rows against `aicSummary.byModel` (which keys on API-called model, not session-primary-model), so credits from cross-model activity within a session (title generation on gpt-4o-mini, subagents on claude-haiku, model-change turns) were displayed against the wrong row (~83-credit visible drift in the user's report). Now sums `session.aicCredits` per session-primary-model — the column reconciles exactly with the hero "AI Credits Spent" total. Rows now sort by credits descending.
 
 ## [1.10.24] - 2026-07-04
 
