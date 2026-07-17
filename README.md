@@ -8,6 +8,10 @@
   <strong>A self-contained VS Code extension that gives you full visibility into your GitHub Copilot token usage.</strong>
 </p>
 
+<p align="center">
+  <img src="images/Dashboard_With_AIC.png" alt="Copilot Usage Dashboard">
+</p>
+
 ---
 
 ## Features
