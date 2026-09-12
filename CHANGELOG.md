@@ -5,6 +5,111 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.8] - 2026-09-11
+
+### Fixed
+
+- **Real Copilot turns were filed as non-billable under a model called
+  `unknown`.** The Non-billable panel — which states outright that GitHub does
+  *not* bill the models it lists — carried an `unknown` row worth 22.85 credits.
+  The traffic was ordinary `claude-opus-5` agent usage.
+
+  The cause is a chatSession shape the parser half-handled. A kind=0 header was
+  present, so the header-less rebuild path was skipped, but that header carried
+  neither `requests[]` nor `inputState.selectedModel` — the only two places the
+  session-level model was read from. The turns themselves arrived later as
+  kind=1 ops carrying `modelId` (`copilot/claude-opus-5`) and
+  `result.metadata.resolvedModel` (`claude-opus-5`), and the emit path consulted
+  neither. Every such turn fell back to `unknown`, and rule 8 of the billability
+  classifier files unrecognised ids as informational BYOK traffic.
+
+  The kind=1 turn-result branch now prefers the per-request `modelId`, then
+  `result.metadata.resolvedModel`, and backfills the session-level model when it
+  is still unresolved. Verified against the live workspace with the new
+  `tests/diagnose-unknown-model-turns.js`: 16 unresolved turns before, 0 after.
+  `tests/verify-chatsession-formats.js` gained a fixture for the mixed shape.
+
+## [1.11.7] - 2026-09-11
+
+### Fixed
+
+- **"By Subagent" reported every run as `unknown`.** `agentName` is an optional
+  argument on the `runSubagent` tool — omit it and the subagent runs the calling
+  agent itself, which Copilot records as `runSubagent-default-<callId>.jsonl` in
+  the child debug log. The scanner treated the missing field as a parse failure
+  and labelled it `unknown`, implying data had been lost when the answer was
+  known all along. Verified against real logs with the new
+  `tests/diagnose-subagent-names.js`: 8 of 8 invocations carried only
+  `description` and `prompt`, and every matching child log was named `default`.
+
+  Omitted names now render as `default`. `unknown` is reserved for arguments
+  that genuinely could not be parsed, and both labels carry a tooltip saying
+  which case applies.
+
+### Added
+
+- **Task descriptions in the Subagent Usage table.** The scanner already read
+  each invocation's `description` argument into `Subagent.description` and then
+  dropped it on the way to the dashboard. With most runs named `default`, that
+  description is the only thing distinguishing them — "Review PR6 CanNm config"
+  says something, a fourth row of `default` does not. `SubagentRow` now carries
+  the distinct descriptions (capped at 12 per agent per session) and the table
+  shows the first three as pills, with a `+N more` marker and the full text on
+  hover.
+
+## [1.11.6] - 2026-09-11
+
+### Fixed
+
+- **"Usage by Source" charged the ledger remainder to VS Code.** The VS Code
+  column was computed as a residual — range total minus OMP, Pi and CLI — so
+  every credit GitHub billed that no local scanner could explain landed on it.
+  It read 66,502.95 credits against 19 sessions and 114.6M tokens while the
+  Systems table directly above reported 12,219.45 for the same machine.
+
+  That remainder is by definition *not* a VS Code figure: it is usage from
+  other devices, IDEs, github.com, the cloud agent, or logs that have since
+  rotated away. It now has its own **Unattributed (no local log)** column,
+  shown only when non-zero, with em-dash session/turn/token cells because it is
+  not a scannable source. The row still totals to the reconciled figure.
+
+## [1.11.5] - 2026-09-11
+
+### Fixed
+
+- **Settings Sync kept resurrecting this machine's own stale row.** After
+  1.11.4 the local system still rendered `not per-system` against the
+  account-wide figure, and `Σ systems this cycle` sat at 0.00 — the fix looked
+  like it had not shipped.
+
+  The synchroniser replaces the whole key rather than merging it, and the
+  inbound map carries whatever *this* machine last uploaded. A machine still on
+  an older build re-uploading the shared map therefore overwrote our freshly
+  written slot with a pre-`basis` copy of itself. The 5-minute publish throttle
+  then suppressed the repair, because the fingerprint had not changed — so the
+  clobbered row persisted until the counters happened to move.
+
+  This machine's live measurement is by definition newer than anything sync can
+  hand back for it, so it is now retained in memory and overlaid on every read.
+  A stored slot that is absent or carries an older schema is additionally
+  recognised as a clobber and rewritten immediately, bypassing the throttle.
+  Foreign slots in the inbound map are still preserved untouched.
+
+- **The daily calendar collapsed the whole cycle onto one square.** With
+  GitHub's ledger reconciled in (1.11.3), the entire unattributed remainder —
+  54,948 of a 66,130-credit cycle in the reported case — was booked onto the
+  last day with local activity. That cell then *was* the colour scale, so every
+  genuinely active day rendered in the lowest bucket and the grid claimed a
+  month's spend happened on a single afternoon.
+
+  The remainder has no per-day distribution to begin with: `quota_snapshots`
+  reports a cycle total, never a daily split. It is still parked on an anchor
+  day so the totals reconcile, but the calendar now excludes it from the
+  intensity scale and from each cell's label, draws the anchor cell with a
+  diagonal hatch, and states the parked amount in a note beneath the legend.
+  Day shading therefore reflects only what the local logs can actually date.
+  `AICDashboardData.quota` gained `anchorDay` to carry this.
+
 ## [1.11.4] - 2026-09-08
 
 ### Fixed

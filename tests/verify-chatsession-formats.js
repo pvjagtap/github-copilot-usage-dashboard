@@ -130,6 +130,27 @@ async function main() {
   assert("session id falls back to filename", s2.sessions.length === 1 && s2.sessions[0].sessionId === SID,
     s2.sessions[0] && s2.sessions[0].sessionId);
 
+  // Mixed shape seen in the wild: a kind=0 header exists (so the header-less
+  // rebuild is skipped) but carries no requests[] and no inputState. Only the
+  // kind=1 ops know the model. Reading it off the session header alone left
+  // real Copilot turns as "unknown", which the classifier then filed as
+  // non-billable BYOK traffic.
+  console.log("\nkind=0 header without requests[] or inputState");
+  const mixed = [
+    JSON.stringify({ kind: 0, v: { sessionId: SID, creationDate: TS, initialLocation: "panel" } }),
+    JSON.stringify({ kind: 1, k: ["requests", 0, "modelId"], v: "copilot/claude-opus-5" }),
+    JSON.stringify({ kind: 1, k: ["requests", 0, "result"], v: { metadata: { ...metadata } } }),
+    JSON.stringify({ kind: 1, k: ["requests", 1, "result"], v: { metadata: { ...metadata, resolvedModel: "claude-sonnet-5" } } }),
+  ].join("\n");
+  const s3 = await scanFixture("mixed header", mixed, `${SID}.jsonl`);
+  assert("both turns emitted", s3.turns.length === 2, `${s3.turns.length}`);
+  assert("model from per-request modelId", s3.turns[0] && s3.turns[0].modelFamily === "claude-opus-5",
+    s3.turns[0] && s3.turns[0].modelFamily);
+  assert("model from result.metadata.resolvedModel", s3.turns[1] && s3.turns[1].modelFamily === "claude-sonnet-5",
+    s3.turns[1] && s3.turns[1].modelFamily);
+  assert("no turn left as unknown", s3.turns.every(t => t.modelFamily && t.modelFamily !== "unknown"),
+    s3.turns.map(t => t.modelFamily).join(","));
+
   console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
   process.exit(failures === 0 ? 0 : 1);
 }

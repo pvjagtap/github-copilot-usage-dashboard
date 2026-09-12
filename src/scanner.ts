@@ -247,7 +247,12 @@ function normalizeFileUri(uri: string): string {
 /**
  * Pull (agentName, description) from a runSubagent tool call's `arguments`
  * field. Accepts either a JSON string or an already-parsed object.
- * Returns sensible defaults when parsing fails or fields are missing.
+ *
+ * `agentName` is optional on the tool — omitting it runs the caller's own
+ * agent, which Copilot names `default` in the child debug log
+ * (`runSubagent-default-<callId>.jsonl`). Reporting that as "unknown" implied
+ * lost data for what is in fact the most common case. "unknown" is now
+ * reserved for arguments that could not be parsed at all.
  */
 function extractSubagentArgs(rawArgs: unknown): { agentName: string; description: string } {
   let agentName = "unknown";
@@ -255,7 +260,10 @@ function extractSubagentArgs(rawArgs: unknown): { agentName: string; description
   try {
     const args: unknown = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs;
     if (isObj(args)) {
-      agentName = typeof args.agentName === "string" ? args.agentName : "unknown";
+      agentName =
+        typeof args.agentName === "string" && args.agentName.trim()
+          ? args.agentName
+          : "default";
       description = typeof args.description === "string" ? args.description : "";
     }
   } catch {
@@ -692,14 +700,46 @@ function parseSessionContent(
         agentId = meta.agentId;
       }
 
+      // A kind=0 header with an empty `requests[]` leaves the session-level
+      // model unresolved, because only that array's `modelId` sets it. The
+      // turns then arrive as kind=1 ops carrying their own model, so prefer
+      // it — otherwise real Copilot turns render as "unknown" and get
+      // classified non-billable.
+      let turnFamily = modelFamily;
+      let turnVendor = modelVendor;
+      let turnProvider = modelProvider;
+      const replayed = replayRequests[turnIndex];
+      const rawTurnModel =
+        isObj(replayed) && typeof replayed.modelId === "string"
+          ? replayed.modelId
+          : typeof meta.resolvedModel === "string"
+            ? meta.resolvedModel
+            : "";
+      if (rawTurnModel) {
+        const ident = splitModelIdentifier(rawTurnModel);
+        turnFamily = ident.model;
+        if (ident.vendor) {
+          turnVendor = ident.vendor;
+          turnProvider = ident.provider;
+        }
+        if (modelFamily === "unknown") {
+          modelFamily = ident.model;
+          if (modelName === "unknown") { modelName = ident.model; }
+          if (ident.vendor) {
+            modelVendor = ident.vendor;
+            modelProvider = ident.provider;
+          }
+        }
+      }
+
       emitTurnAndToolCalls(
         meta,
         {
           sessionId,
           turnIndex,
-          modelFamily,
-          modelVendor: modelVendor || undefined,
-          modelProvider: modelProvider || undefined,
+          modelFamily: turnFamily,
+          modelVendor: turnVendor || undefined,
+          modelProvider: turnProvider || undefined,
           timestamp,
           workspaceName: wName,
         },

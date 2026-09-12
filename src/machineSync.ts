@@ -13,8 +13,13 @@
  * `updateExtensionState` in the shared process). A single flat usage blob
  * would therefore let whichever machine synced last erase the others. The
  * payload is instead a map keyed by `vscode.env.machineId`, and a machine only
- * ever writes its own slot after re-reading the map. Each machine is the sole
- * author of its own slot, so a lost race costs at most one refresh interval.
+ * ever writes its own slot after re-reading the map.
+ *
+ * That replace still lands on *our* slot: a remote copy carries whatever this
+ * machine last uploaded, so an inbound sync can resurrect a stale or
+ * older-schema version of our own row. This machine's live measurement is by
+ * definition newer than anything sync can hand back for it, so `ownSlot` below
+ * is treated as authoritative locally and overlaid on every read.
  */
 import * as vscode from "vscode";
 import * as os from "os";
@@ -60,6 +65,9 @@ const PUBLISH_MIN_INTERVAL_MS = 5 * 60 * 1000;
 let lastPublishAt = 0;
 let lastPublishFingerprint = "";
 
+/** This machine's live rollup — outranks any synced copy of the same slot. */
+let ownSlot: MachineSlot | undefined;
+
 /** The rollup one machine publishes about itself. */
 export interface MachineSlot {
   /** `os.hostname()` — so a system is recognisable beyond "System 2". */
@@ -69,7 +77,20 @@ export interface MachineSlot {
   lastSeen: number;
   /** Billing cycle this snapshot describes, so stale cycles aren't summed. */
   cycleStart: string;
+  /**
+   * Credits this machine's OWN logs account for in `cycleStart`.
+   *
+   * Must never be the quota-reconciled total: that is GitHub's account-wide
+   * ledger figure, identical on every machine, and summing it across machines
+   * double-counts the entire cycle.
+   */
   cycleCredits: number;
+  /**
+   * `"local"` once the publisher guarantees the invariant above. Absent on
+   * slots written before v1.11.4, which published the account-wide total —
+   * those are displayed but held out of the combined sum.
+   */
+  basis?: "local";
   sessions: number;
   turns: number;
   totalTokens: number;
@@ -101,6 +122,7 @@ export interface MachineView extends MachineSlot {
 export interface LocalUsage {
   cycleStart: string;
   cycleCredits: number;
+  basis: "local";
   sessions: number;
   turns: number;
   totalTokens: number;
@@ -167,23 +189,17 @@ export function publishAndRead(
   const id = vscode.env.machineId;
   const now = Date.now();
   const map = { ...(ctx.globalState.get<Record<string, MachineSlot>>(MACHINES_KEY) ?? {}) };
-  const prior = map[id];
+  const stored = map[id];
+  const prior = stored ?? ownSlot;
 
-  // Nothing meaningful changed, or we wrote very recently — read only. The
-  // returned view still reflects whatever other machines have synced in.
-  const fingerprint = `${local.cycleStart}|${local.cycleCredits}|${local.sessions}|${local.turns}`;
-  const skip =
-    !!prior &&
-    (fingerprint === lastPublishFingerprint || now - lastPublishAt < PUBLISH_MIN_INTERVAL_MS);
-  if (skip) return decorate(map, id, now);
-
-  map[id] = {
+  const slot: MachineSlot = {
     host: os.hostname(),
     platform: process.platform,
     firstSeen: prior?.firstSeen ?? now,
     lastSeen: now,
     cycleStart: local.cycleStart,
     cycleCredits: local.cycleCredits,
+    basis: "local",
     sessions: local.sessions,
     turns: local.turns,
     totalTokens: local.totalTokens,
@@ -191,23 +207,39 @@ export function publishAndRead(
     byModel: local.byModel,
     schema: SLOT_SCHEMA,
   };
+  ownSlot = slot;
+  map[id] = slot;
 
-  lastPublishAt = now;
-  lastPublishFingerprint = fingerprint;
-  void ctx.globalState.update(MACHINES_KEY, map);
+  // A stored slot that is missing or carries another version's schema means an
+  // inbound sync overwrote ours. Repair it now rather than waiting out the
+  // throttle, or the row stays wrong until the counters happen to move.
+  const clobbered = !stored || stored.basis !== "local";
+  const fingerprint = `${local.cycleStart}|${local.cycleCredits}|${local.sessions}|${local.turns}`;
+  const throttled =
+    !clobbered &&
+    (fingerprint === lastPublishFingerprint || now - lastPublishAt < PUBLISH_MIN_INTERVAL_MS);
+
+  if (!throttled) {
+    lastPublishAt = now;
+    lastPublishFingerprint = fingerprint;
+    void ctx.globalState.update(MACHINES_KEY, map);
+  }
   return decorate(map, id, now);
 }
 
-/** Test seam: clears the publish throttle. */
+/** Test seam: clears the publish throttle and the cached own slot. */
 export function __resetThrottleForTesting(): void {
   lastPublishAt = 0;
   lastPublishFingerprint = "";
+  ownSlot = undefined;
 }
 
 /** Reads without publishing — for consumers that only render. */
 export function readMachines(ctx: vscode.ExtensionContext): MachineView[] {
-  const map = ctx.globalState.get<Record<string, MachineSlot>>(MACHINES_KEY) ?? {};
-  return decorate(map, vscode.env.machineId, Date.now());
+  const id = vscode.env.machineId;
+  const map = { ...(ctx.globalState.get<Record<string, MachineSlot>>(MACHINES_KEY) ?? {}) };
+  if (ownSlot) { map[id] = ownSlot; }
+  return decorate(map, id, Date.now());
 }
 
 function decorate(
@@ -227,11 +259,14 @@ function decorate(
       label: `System ${i + 1}`,
       isThisMachine: id === thisId,
       dormant: now - slot.lastSeen > DORMANT_MS,
-      creditsAreLocal: (slot.schema ?? 1) >= SLOT_SCHEMA,
+      // Either marker proves a per-machine figure: `schema` is written by
+      // v1.11.4, `basis` by the parallel line of fixes. Slots carrying one but
+      // not the other are in the wild, so neither alone is sufficient.
+      creditsAreLocal: slot.basis === "local" || (slot.schema ?? 1) >= SLOT_SCHEMA,
     }));
 }
 
-/** Sums slots that describe the same billing cycle. */
+/** Sums slots that describe the same billing cycle on a per-machine basis. */
 export function combinedCredits(views: MachineView[], cycleStart: string): number {
   const total = views
     .filter(v => v.cycleStart === cycleStart && v.creditsAreLocal)

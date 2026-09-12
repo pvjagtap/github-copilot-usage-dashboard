@@ -208,6 +208,8 @@ export interface SubagentRow {
   sessionId: string;
   agentName: string;
   count: number;
+  /** Distinct `description` args, in first-seen order — what each run was for. */
+  descriptions: string[];
 }
 
 export interface TurnRow {
@@ -498,6 +500,12 @@ export interface AICDashboardData {
     localDelta: number;
     /** The locally derived total, retained for the drift diagnostic. */
     localTotal: number;
+    /**
+     * Day `localDelta` was booked onto in `byDay`. The remainder has no known
+     * per-day distribution, so surfaces that plot shape (the calendar) must
+     * exclude it rather than render it as a real day's spend.
+     */
+    anchorDay?: string;
     /** Whether overage spend is permitted on this seat. */
     overagePermitted: boolean;
     /** Server timestamp of the snapshot. */
@@ -619,11 +627,19 @@ function computeTools(toolCalls: ToolCall[]): ToolRow[] {
 
 function computeSubagents(subagents: Subagent[]): SubagentRow[] {
   const map = new Map<string, SubagentRow>();
+  // Bounded so a session that spawns hundreds of subagents cannot bloat the
+  // webview payload with near-duplicate task labels.
+  const MAX_DESCRIPTIONS = 12;
   for (const sa of subagents) {
     const key = `${sa.sessionId}:${sa.agentName}`;
     const existing = map.get(key);
-    if (existing) { existing.count++; }
-    else { map.set(key, { sessionId: sa.sessionId, agentName: sa.agentName, count: 1 }); }
+    const row = existing ?? { sessionId: sa.sessionId, agentName: sa.agentName, count: 0, descriptions: [] };
+    row.count++;
+    const d = sa.description.trim();
+    if (d && row.descriptions.length < MAX_DESCRIPTIONS && !row.descriptions.includes(d)) {
+      row.descriptions.push(d);
+    }
+    if (!existing) { map.set(key, row); }
   }
   return Array.from(map.values()).sort((a, b) => b.count - a.count);
 }
@@ -1869,13 +1885,14 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
   // activity keeps the calendar's shape honest — we know the credits were
   // spent, just not which local session produced them.
   const reconciledByDay = new Map(summary.byDay);
+  let quotaAnchorDay = "";
   if (quotaDelta !== 0) {
     const cycleDays = [...reconciledByDay.keys()]
       .filter(d => d >= summary.billingCycleStart && d <= summary.billingCycleEnd)
       .sort();
-    const anchor = cycleDays[cycleDays.length - 1]
+    quotaAnchorDay = cycleDays[cycleDays.length - 1]
       ?? new Date().toISOString().slice(0, 10);
-    reconciledByDay.set(anchor, Math.max(0, (reconciledByDay.get(anchor) ?? 0) + quotaDelta));
+    reconciledByDay.set(quotaAnchorDay, Math.max(0, (reconciledByDay.get(quotaAnchorDay) ?? 0) + quotaDelta));
   }
 
   // Pace and projection must derive from the reconciled total too, or the
@@ -1987,6 +2004,7 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
           remaining: quotaSnapshot.remaining,
           localDelta: quotaDelta,
           localTotal: localTotalCr,
+          anchorDay: quotaAnchorDay || undefined,
           overagePermitted: quotaSnapshot.overagePermitted,
           timestampUtc: quotaSnapshot.timestampUtc,
         }

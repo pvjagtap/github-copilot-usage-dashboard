@@ -165,6 +165,7 @@ function buildData(): DashboardData {
       const machines = publishAndRead(extCtx, {
         cycleStart: aic.billingCycleStart,
         cycleCredits: aic.localTotalCredits,
+        basis: "local",
         sessions: new Set(cycleTurns.map(t => t.sessionId)).size,
         turns: cycleTurns.length,
         totalTokens: cycleTurns.reduce(

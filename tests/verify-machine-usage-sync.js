@@ -52,6 +52,7 @@ const KEY = "copilotUsage.usage.machines.v1";
 const usage = over => Object.assign({
   cycleStart: "2026-08-01",
   cycleCredits: 100,
+  basis: "local",
   sessions: 5,
   turns: 50,
   totalTokens: 1000,
@@ -94,6 +95,7 @@ console.log("\n3. System numbering is stable and derived from firstSeen");
     "machine-A": { host: "a", platform: "win32", firstSeen: 900, lastSeen: 900, cycleStart: "2026-08-01", cycleCredits: 2, sessions: 0, turns: 0, totalTokens: 0, byDay: {}, byModel: {} },
   };
   MACHINE_ID = "machine-A";
+  sync.__resetThrottleForTesting();
   const fromA = sync.readMachines(ctxFor({ [KEY]: map }));
   MACHINE_ID = "machine-Z";
   const fromZ = sync.readMachines(ctxFor({ [KEY]: map }));
@@ -116,6 +118,7 @@ console.log("\n4. Dormant machines are flagged, not silently summed");
     "new": { host: "n", platform: "win32", firstSeen: 2, lastSeen: Date.now(), cycleStart: "2026-08-01", cycleCredits: 20, sessions: 0, turns: 0, totalTokens: 0, byDay: {}, byModel: {} },
   };
   MACHINE_ID = "new";
+  sync.__resetThrottleForTesting();
   const views = sync.readMachines(ctxFor({ [KEY]: map }));
   check("stale machine marked dormant", views.find(v => v.id === "old").dormant === true);
   check("fresh machine not dormant", views.find(v => v.id === "new").dormant === false);
@@ -124,11 +127,12 @@ console.log("\n4. Dormant machines are flagged, not silently summed");
 console.log("\n5. Combined total only sums matching billing cycles");
 {
   const map = {
-    "a": { host: "a", platform: "win32", firstSeen: 1, lastSeen: Date.now(), cycleStart: "2026-08-01", cycleCredits: 100.5, sessions: 0, turns: 0, totalTokens: 0, byDay: {}, byModel: {}, schema: 2 },
-    "b": { host: "b", platform: "win32", firstSeen: 2, lastSeen: Date.now(), cycleStart: "2026-08-01", cycleCredits: 20.25, sessions: 0, turns: 0, totalTokens: 0, byDay: {}, byModel: {}, schema: 2 },
-    "c": { host: "c", platform: "win32", firstSeen: 3, lastSeen: Date.now(), cycleStart: "2026-07-01", cycleCredits: 999, sessions: 0, turns: 0, totalTokens: 0, byDay: {}, byModel: {}, schema: 2 },
+    "a": { host: "a", platform: "win32", firstSeen: 1, lastSeen: Date.now(), cycleStart: "2026-08-01", cycleCredits: 100.5, basis: "local", sessions: 0, turns: 0, totalTokens: 0, byDay: {}, byModel: {}, schema: 2 },
+    "b": { host: "b", platform: "win32", firstSeen: 2, lastSeen: Date.now(), cycleStart: "2026-08-01", cycleCredits: 20.25, basis: "local", sessions: 0, turns: 0, totalTokens: 0, byDay: {}, byModel: {}, schema: 2 },
+    "c": { host: "c", platform: "win32", firstSeen: 3, lastSeen: Date.now(), cycleStart: "2026-07-01", cycleCredits: 999, basis: "local", sessions: 0, turns: 0, totalTokens: 0, byDay: {}, byModel: {}, schema: 2 },
   };
   MACHINE_ID = "a";
+  sync.__resetThrottleForTesting();
   const views = sync.readMachines(ctxFor({ [KEY]: map }));
   const total = sync.combinedCredits(views, "2026-08-01");
   check("sums current cycle only", total === 120.75, String(total));
@@ -154,6 +158,37 @@ console.log("\n5b. Pre-fix slots stay visible but are never summed");
   check("combined excludes the account-wide figure",
     sync.combinedCredits(views, "2026-08-01") === 767.15,
     String(sync.combinedCredits(views, "2026-08-01")));
+}
+
+console.log("\n5c. A `basis` tag alone also proves a per-machine figure");
+{
+  // Pre-v1.11.4 publishers wrote the quota-reconciled account total, which is
+  // identical on every machine — summing two of them doubled the whole cycle.
+  const map = {
+    "a": { host: "a", platform: "win32", firstSeen: 1, lastSeen: Date.now(), cycleStart: "2026-08-01", cycleCredits: 66130, sessions: 0, turns: 0, totalTokens: 0, byDay: {}, byModel: {} },
+    "b": { host: "b", platform: "win32", firstSeen: 2, lastSeen: Date.now(), cycleStart: "2026-08-01", cycleCredits: 66130, sessions: 0, turns: 0, totalTokens: 0, byDay: {}, byModel: {} },
+    "c": { host: "c", platform: "win32", firstSeen: 3, lastSeen: Date.now(), cycleStart: "2026-08-01", cycleCredits: 11182.4, basis: "local", sessions: 0, turns: 0, totalTokens: 0, byDay: {}, byModel: {} },
+  };
+  MACHINE_ID = "c";
+  sync.__resetThrottleForTesting();
+  const views = sync.readMachines(ctxFor({ [KEY]: map }));
+  check("legacy slots flagged", views.filter(v => !v.creditsAreLocal).map(v => v.id).join(",") === "a,b");
+  check("basis-tagged slot not flagged", views.find(v => v.id === "c").creditsAreLocal === true);
+  check("legacy credits excluded from combined",
+    sync.combinedCredits(views, "2026-08-01") === 11182.4,
+    String(sync.combinedCredits(views, "2026-08-01")));
+}
+
+console.log("\n5d. Republishing stamps the local basis onto an upgraded slot");
+{
+  const ctx = ctxFor({ [KEY]: {
+    "machine-A": { host: "a", platform: "win32", firstSeen: 1, lastSeen: 1, cycleStart: "2026-08-01", cycleCredits: 66130, sessions: 0, turns: 0, totalTokens: 0, byDay: {}, byModel: {} },
+  } });
+  MACHINE_ID = "machine-A";
+  sync.__resetThrottleForTesting();
+  const views = sync.publishAndRead(ctx, usage({ cycleCredits: 11182.4 }));
+  check("upgraded slot carries local basis", ctx.__raw.get(KEY)["machine-A"].basis === "local");
+  check("upgraded slot no longer legacy", views[0].creditsAreLocal === true);
 }
 
 console.log("\n6. Daily history is trimmed so the payload stays bounded");
@@ -251,9 +286,53 @@ console.log("\n7b. Repeat rebuilds do not hammer the sync service");
     views.length === 1 && views[0].isThisMachine === true);
 }
 
+console.log("\n7c. A sync that overwrites our own slot is repaired immediately");
+{
+  // Settings Sync replaces the whole key, so an inbound map carries whatever
+  // this machine last uploaded — including a pre-basis copy of our own row.
+  MACHINE_ID = "machine-A";
+  const ctx = ctxFor();
+  sync.__resetThrottleForTesting();
+  sync.publishAndRead(ctx, usage({ cycleCredits: 11182.4 }));
+
+  const remote = {
+    "machine-A": { host: "a", platform: "win32", firstSeen: 1, lastSeen: 1, cycleStart: "2026-08-01", cycleCredits: 66923, sessions: 18, turns: 222, totalTokens: 0, byDay: {}, byModel: {} },
+    "machine-B": { host: "b", platform: "win32", firstSeen: 2, lastSeen: Date.now(), cycleStart: "2026-08-01", cycleCredits: 66923, sessions: 264, turns: 2704, totalTokens: 0, byDay: {}, byModel: {} },
+  };
+  ctx.__raw.set(KEY, remote);
+
+  // Same fingerprint as the publish above, so the throttle would otherwise
+  // suppress the repair and leave our row reading the account-wide figure.
+  const views = sync.publishAndRead(ctx, usage({ cycleCredits: 11182.4 }));
+  const mine = views.find(v => v.isThisMachine);
+  check("own row is not resurrected as legacy", mine.creditsAreLocal === true);
+  check("own row keeps the local figure", mine.cycleCredits === 11182.4, String(mine.cycleCredits));
+  check("repair write persisted through the throttle",
+    ctx.__raw.get(KEY)["machine-A"].basis === "local");
+  check("foreign slot from the inbound map is preserved",
+    views.some(v => v.id === "machine-B" && v.creditsAreLocal === false));
+  check("only our own local credits are summed",
+    sync.combinedCredits(views, "2026-08-01") === 11182.4);
+}
+
+console.log("\n7d. readMachines overlays the live own slot over a synced copy");
+{
+  MACHINE_ID = "machine-A";
+  const ctx = ctxFor();
+  sync.__resetThrottleForTesting();
+  sync.publishAndRead(ctx, usage({ cycleCredits: 11182.4 }));
+  ctx.__raw.set(KEY, {
+    "machine-A": { host: "a", platform: "win32", firstSeen: 1, lastSeen: 1, cycleStart: "2026-08-01", cycleCredits: 66923, sessions: 0, turns: 0, totalTokens: 0, byDay: {}, byModel: {} },
+  });
+  const mine = sync.readMachines(ctx).find(v => v.isThisMachine);
+  check("read-only path prefers the live slot", mine.cycleCredits === 11182.4, String(mine.cycleCredits));
+  check("read-only path is not flagged legacy", mine.creditsAreLocal === true);
+}
+
 console.log("\n8. Malformed foreign slots are ignored rather than rendered");
 {
   MACHINE_ID = "machine-A";
+  sync.__resetThrottleForTesting();
   const views = sync.readMachines(ctxFor({
     [KEY]: {
       "bad": null,

@@ -898,8 +898,18 @@ function renderOtel(live) {
  * Build a calendar grid showing daily AI Credits for the current billing cycle.
  * Each cell is color-coded by intensity. Shows the full month with
  * day-of-week headers (Mon-Sun).
+ *
+ * The unattributed arg ({day, credits}) is the slice of dayMap that came from
+ * GitHub's ledger rather than a local log. It has no real per-day
+ * distribution — dashboardData books it on the last active day purely so the
+ * totals reconcile — so it is held out of the colour scale and drawn as a
+ * distinct overlay. Folding it in makes one cell 50x the true maximum and
+ * flattens every other day to the lowest bucket.
  */
-function buildCreditCalendar(cycleStart, cycleEnd, dayMap) {
+function buildCreditCalendar(cycleStart, cycleEnd, dayMap, unattributed) {
+  const unattrDay = unattributed && unattributed.credits > 0 ? unattributed.day : '';
+  const unattrCredits = unattrDay ? unattributed.credits : 0;
+
   // Determine the month to display (from billing cycle start)
   const startDate = new Date(cycleStart + 'T00:00:00');
   const year = startDate.getFullYear();
@@ -918,8 +928,10 @@ function buildCreditCalendar(cycleStart, cycleEnd, dayMap) {
   for (let d = 1; d <= daysInMonth; d++) {
     const dateStr = year + '-' + String(month + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0');
     const cr = dayMap[dateStr] || 0;
-    monthCredits.push({ day: d, date: dateStr, credits: cr });
-    if (cr > maxCredits) { maxCredits = cr; }
+    const unattr = dateStr === unattrDay ? Math.min(unattrCredits, cr) : 0;
+    const logged = cr - unattr;
+    monthCredits.push({ day: d, date: dateStr, credits: cr, logged: logged, unattr: unattr });
+    if (logged > maxCredits) { maxCredits = logged; }
     totalMonth += cr;
   }
 
@@ -949,7 +961,7 @@ function buildCreditCalendar(cycleStart, cycleEnd, dayMap) {
   // Day cells
   for (let i = 0; i < daysInMonth; i++) {
     const mc = monthCredits[i];
-    const intensity = maxCredits > 0 ? mc.credits / maxCredits : 0;
+    const intensity = maxCredits > 0 ? mc.logged / maxCredits : 0;
     const isToday = mc.date === todayStr;
     const isFuture = mc.date > todayStr;
 
@@ -959,7 +971,7 @@ function buildCreditCalendar(cycleStart, cycleEnd, dayMap) {
       bg = 'var(--border)';
       border = 'none';
       textColor = 'var(--muted)';
-    } else if (mc.credits === 0) {
+    } else if (mc.logged === 0) {
       bg = 'rgba(255,255,255,0.03)';
       border = '1px solid var(--border)';
       textColor = 'var(--muted)';
@@ -982,10 +994,18 @@ function buildCreditCalendar(cycleStart, cycleEnd, dayMap) {
     }
 
     const todayOutline = isToday ? ';outline:2px solid var(--blue);outline-offset:-1px' : '';
-    const tooltip = mc.date + ': ' + mc.credits.toFixed(1) + ' credits';
-    const creditsLabel = mc.credits > 0 ? '<div style="font-size:8px;color:'+textColor+';opacity:0.9">'+mc.credits.toFixed(1)+'</div>' : '';
+    // The reconciliation cell is striped, not filled: its value is a cycle
+    // remainder parked here, not that day's measured spend.
+    const unattrMark = mc.unattr > 0
+      ? ';background-image:repeating-linear-gradient(135deg,rgba(255,159,10,0.45) 0 4px,transparent 4px 8px)'
+      : '';
+    const tooltip = mc.unattr > 0
+      ? mc.date + ': ' + mc.logged.toFixed(1) + ' credits from local logs + ' + mc.unattr.toFixed(1)
+        + ' unattributed cycle credits parked on this day (GitHub billed them; no local log says when)'
+      : mc.date + ': ' + mc.credits.toFixed(1) + ' credits';
+    const creditsLabel = mc.logged > 0 ? '<div style="font-size:8px;color:'+textColor+';opacity:0.9">'+mc.logged.toFixed(1)+'</div>' : '';
 
-    gridCells += '<div title="'+tooltip+'" style="aspect-ratio:1;border-radius:4px;background:'+bg+';border:'+border+';display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:default'+todayOutline+'">'
+    gridCells += '<div title="'+tooltip+'" style="aspect-ratio:1;border-radius:4px;background:'+bg+';border:'+border+';display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:default'+todayOutline+unattrMark+'">'
       + '<div style="font-size:10px;font-weight:600;color:'+textColor+'">'+mc.day+'</div>'
       + creditsLabel
       + '</div>';
@@ -1004,8 +1024,20 @@ function buildCreditCalendar(cycleStart, cycleEnd, dayMap) {
     + '<span style="margin-left:auto">Month total: <strong style="color:var(--orange)">'+totalMonth.toFixed(1)+'</strong> credits</span>'
     + '</div>';
 
+  // Without this the grid silently claims the whole cycle happened on one day.
+  const unattrNote = unattrCredits > 0
+    ? '<div style="margin-top:6px;padding:6px 8px;background:var(--border);border-radius:4px;font-size:9px;color:var(--muted);line-height:1.5">'
+      + '<span style="display:inline-block;width:10px;height:10px;border-radius:2px;vertical-align:-1px;margin-right:5px;'
+      + 'background-image:repeating-linear-gradient(135deg,rgba(255,159,10,0.45) 0 4px,transparent 4px 8px);border:1px solid var(--border)"></span>'
+      + '<strong>'+unattrCredits.toFixed(1)+'</strong> of the month total is billed by GitHub but absent from this machine&rsquo;s debug logs '
+      + '(other devices/IDEs, github.com, the cloud agent, or rotated-away logs). GitHub&rsquo;s ledger reports a cycle total only, never a per-day split, '
+      + 'so it is parked on '+esc(unattrDay)+' to keep the total honest and is <strong>excluded from the day shading</strong> — the colours show '
+      + 'only what the local logs can actually date.'
+      + '</div>'
+    : '';
+
   return '<div class="section-title" style="margin-bottom:6px">Daily Credits — '+monthName+'</div>'
-    + headerRow + gridCells + legend;
+    + headerRow + gridCells + legend + unattrNote;
 }
 
 function renderAIC(aic, bounds, filteredSessions) {
@@ -1178,7 +1210,14 @@ function renderAIC(aic, bounds, filteredSessions) {
   // (authoritative, current cycle) with session-derived data (any month).
   const calStart = bounds.start || aic.billingCycleStart;
   const calEnd = bounds.end || aic.billingCycleEnd;
-  const calendarHTML = buildCreditCalendar(calStart, calEnd, finalDayMap);
+  // The ledger remainder only exists inside finalDayMap when the range covers
+  // the day it was parked on; outside that it must not be subtracted.
+  const anchorDay = aic.quota && aic.quota.anchorDay;
+  const unattributed = anchorDay && aic.quota.localDelta > 0
+    && (!bounds.start || anchorDay >= bounds.start) && (!bounds.end || anchorDay <= bounds.end)
+    ? { day: anchorDay, credits: aic.quota.localDelta }
+    : null;
+  const calendarHTML = buildCreditCalendar(calStart, calEnd, finalDayMap, unattributed);
 
   // Estimation note. A range that closed before AIC billing began can only be
   // a rate-table estimate, no matter what the current cycle's data looks like.
@@ -1370,17 +1409,35 @@ function renderAIC(aic, bounds, filteredSessions) {
         + '<td>'+ago(m.lastSeen)+stale+'</td></tr>';
     }).join('');
 
+    // Per-machine figures are local-log derived, so their sum is a lower bound
+    // on the account. GitHub's ledger is the real number; show the shortfall
+    // rather than letting the table's total quietly contradict the hero tile.
+    const ledger = aic.quota ? aic.quota.creditsUsed : 0;
+    const unattributedRow = ledger > 0 && ledger - combined > 0.005
+      ? '<tr><td colspan="2" style="text-align:right;color:var(--muted)">'
+        + 'Billed by GitHub, attributed to no system'
+        + '<span class="mult-badge" title="Usage from IDEs, devices or surfaces that run no copy of this extension — github.com, the cloud agent, mobile, or a machine that has not synced.">no local log</span>:</td>'
+        + '<td class="num" style="color:var(--muted)">'+(ledger - combined).toFixed(2)+'</td>'
+        + '<td class="num" style="color:var(--muted)">'+usd(ledger - combined)+'</td><td colspan="4"></td></tr>'
+      : '';
+    const ledgerRow = ledger > 0
+      ? '<tr><td colspan="2" style="text-align:right;color:var(--muted)">Account total (GitHub ledger):</td>'
+        + '<td class="num"><strong style="color:var(--orange)">'+ledger.toFixed(2)+'</strong></td>'
+        + '<td class="num"><strong style="color:var(--orange)">'+usd(ledger)+'</strong></td><td colspan="4"></td></tr>'
+      : '';
+
     // The budget is an account allowance, not a per-machine one, so overage is
-    // only meaningful against the combined figure — the per-system dollar
+    // only meaningful against the account figure — the per-system dollar
     // amounts above are gross value at the same rate, not separate bills. It
     // is also a per-cycle allowance, so it is withheld for any range that is
     // not exactly the current cycle.
     const rangeIsCycle = bounds.start === aic.billingCycleStart && !bounds.end;
+    const chargeable = ledger > 0 ? ledger : combined;
     const effBudget = isPromo ? promo.promoBudget : (aic.monthlyBudget || 0);
-    const overCombined = effBudget > 0 ? Math.max(0, combined - effBudget) : 0;
+    const overCombined = effBudget > 0 ? Math.max(0, chargeable - effBudget) : 0;
     const overageRow = effBudget > 0 && rangeIsCycle
       ? '<tr><td colspan="3" style="text-align:right;color:var(--muted)">'
-        + 'Combined overage vs '+effBudget.toLocaleString()+'-credit allowance'+(isPromo ? ' (promo)' : '')+':</td>'
+        + 'Overage vs '+effBudget.toLocaleString()+'-credit allowance'+(isPromo ? ' (promo)' : '')+':</td>'
         + '<td class="num"><strong style="color:'+(overCombined > 0 ? 'var(--orange)' : 'var(--green)')+'">'
         + '$'+(overCombined * rate).toFixed(2)+'</strong></td><td colspan="4"></td></tr>'
       : '';
@@ -1393,18 +1450,20 @@ function renderAIC(aic, bounds, filteredSessions) {
     systemsHTML = '<div style="margin-top:16px">'
       + '<div class="section-title" style="margin-bottom:8px">Systems — Combined Usage</div>'
       + '<div style="padding:8px 10px;background:var(--border);border-radius:4px;font-size:10px;color:var(--muted);margin-bottom:8px">'
-      + 'Each system publishes a rollup of its own credits over Settings Sync. Logs, prompts and session contents are never shared. '
+      + 'Each system publishes a rollup of its <strong>own</strong> credits over Settings Sync. Logs, prompts and session contents are never shared. '
       + 'Credits follow the selected range; sessions, turns and tokens are a whole-slot snapshot and show &mdash; outside the cycle a '
-      + 'system last reported. Each system reports what its own local logs account for &mdash; not the account-wide ledger &mdash; so '
-      + 'the systems sum to a meaningful combined figure. '
-      + 'Per-system cost is credits &times; $'+rate+' &mdash; gross value, not a separate bill. Only the combined overage below is chargeable.'
+      + 'system last reported. These are local-log figures, so their sum is a lower bound &mdash; the account total below comes from '
+      + 'GitHub&rsquo;s ledger and is the only chargeable number. '
+      + 'Per-system cost is credits &times; $'+rate+' &mdash; gross value, not a separate bill.'
       + legacyNote
       + '</div>'
       + '<table><thead><tr><th>System</th><th>Host</th><th class="num">Credits ('+esc(rangeName)+')</th><th class="num">Cost</th><th class="num">Sessions</th><th class="num">Turns</th><th class="num">Tokens</th><th>Last seen</th></tr></thead><tbody>'
       + sysRows
-      + '</tbody><tfoot><tr><td colspan="2" style="text-align:right;color:var(--muted)">Combined '+esc(rangeName.toLowerCase())+':</td>'
+      + '</tbody><tfoot><tr><td colspan="2" style="text-align:right;color:var(--muted)">Σ systems '+esc(rangeName.toLowerCase())+':</td>'
       + '<td class="num"><strong>'+combined.toFixed(2)+'</strong></td>'
       + '<td class="num"><strong>'+usd(combined)+'</strong></td><td colspan="4"></td></tr>'
+      + unattributedRow
+      + ledgerRow
       + overageRow
       + '</tfoot></table>'
       + '</div>';
@@ -1454,8 +1513,13 @@ function renderAgentSessions(agent, bounds, filteredSessions, rangeAicTotal) {
   // For non-cycle ranges we fall back to the session sum since agent totals
   // are cycle/all-time scoped (mixing them would over-subtract).
   const isCycleAlignedRange = selectedRange === 'tm' || selectedRange === 'all' || (!bounds.start && !bounds.end);
+  // Credits GitHub billed that no local scanner can attribute to any source.
+  // Left in the residual they made the VS Code column read 66,502.95 credits
+  // against 19 sessions while the Systems table above showed 12,219.45.
+  const _q = DATA.aicSummary && DATA.aicSummary.quota;
+  const unattributedAic = isCycleAlignedRange && _q && _q.localDelta > 0 ? _q.localDelta : 0;
   const vscodeAicCredits = isCycleAlignedRange && typeof rangeAicTotal === 'number'
-    ? Math.max(0, rangeAicTotal - (agent.ompTotalCredits||0) - (agent.piTotalCredits||0) - cliDisplayCredits)
+    ? Math.max(0, rangeAicTotal - unattributedAic - (agent.ompTotalCredits||0) - (agent.piTotalCredits||0) - cliDisplayCredits)
     : filteredSessions.reduce((s,x) => s + sessionCreditsInRange(x, bounds), 0);
   const hasAgentData = agent.ompSessions > 0 || agent.piSessions > 0 || agent.cliSessions > 0;
   const agentNote = hasAgentData
@@ -1496,7 +1560,7 @@ function renderAgentSessions(agent, bounds, filteredSessions, rangeAicTotal) {
   const totalSess  = vscodeSessions + (agent.ompSessions||0) + (agent.piSessions||0) + (agent.cliSessions||0);
   const totalCalls = vscodeTurns + (agent.ompLlmCalls||0) + (agent.piLlmCalls||0) + (agent.cliLlmCalls||0);
   const totalTok   = vscodeTotalTokens + (agent.ompAllTimeTokens||0) + (agent.piAllTimeTokens||0) + (agent.cliAllTimeTokens||0);
-  const totalAIC   = fmtAIC(vscodeAicCredits + (agent.ompTotalCredits||0) + (agent.piTotalCredits||0) + cliDisplayCredits);
+  const totalAIC   = fmtAIC(vscodeAicCredits + (agent.ompTotalCredits||0) + (agent.piTotalCredits||0) + cliDisplayCredits + unattributedAic);
   const totalCell = v => isCycleAlignedRange
     ? '<td class="num orange"><strong>'+v+'</strong></td>'
     : '<td class="num" style="color:var(--muted)" title="VS Code is range-filtered; OMP/Pi/CLI are all-time — a combined total would mix time windows">—</td>';
@@ -1513,6 +1577,10 @@ function renderAgentSessions(agent, bounds, filteredSessions, rangeAicTotal) {
     '<span style="display:inline-block;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600;' +
     'background:'+color+';color:#fff;margin-right:4px">'+label+'</span>';
 
+  // Not a source, so it has no session/turn/token counts to report.
+  const unattrCell = html => unattributedAic > 0 ? html : '';
+  const unattrDash = unattrCell('<td class="num" style="color:var(--muted)">—</td>');
+
   const tbody =
     '<tr>' +
       '<td>Sessions</td>' +
@@ -1520,6 +1588,7 @@ function renderAgentSessions(agent, bounds, filteredSessions, rangeAicTotal) {
       '<td class="num">'+(agent.ompSessions||0)+'</td>' +
       '<td class="num">'+(agent.piSessions||0)+'</td>' +
       '<td class="num">'+(agent.cliSessions||0)+'</td>' +
+      unattrDash +
       totalCell(totalSess) +
     '</tr>' +
     '<tr>' +
@@ -1528,6 +1597,7 @@ function renderAgentSessions(agent, bounds, filteredSessions, rangeAicTotal) {
       '<td class="num">'+(agent.ompLlmCalls||0).toLocaleString()+'</td>' +
       '<td class="num">'+(agent.piLlmCalls||0).toLocaleString()+'</td>' +
       '<td class="num" title="User prompts in the billing window (slash commands excluded)">'+(agent.cliLlmCalls||0).toLocaleString()+'</td>' +
+      unattrDash +
       totalCell(totalCalls.toLocaleString()) +
     '</tr>' +
     '<tr>' +
@@ -1536,6 +1606,7 @@ function renderAgentSessions(agent, bounds, filteredSessions, rangeAicTotal) {
       '<td class="num" title="All-time historical OMP agent tokens">'+fmtTok(agent.ompAllTimeTokens||0)+'</td>' +
       '<td class="num" title="All-time historical Pi agent tokens">'+fmtTok(agent.piAllTimeTokens||0)+'</td>' +
       '<td class="num" title="All-time CLI live output tokens (from assistant.message events)">'+fmtTok(agent.cliAllTimeTokens||0)+'</td>' +
+      unattrDash +
       totalCell(fmtTok(totalTok)) +
     '</tr>' +
     '<tr style="border-top:1px solid var(--border)">' +
@@ -1544,6 +1615,7 @@ function renderAgentSessions(agent, bounds, filteredSessions, rangeAicTotal) {
       '<td class="num orange">'+fmtAIC(agent.ompTotalCredits||0)+'</td>' +
       '<td class="num orange">'+fmtAIC(agent.piTotalCredits||0)+'</td>' +
       '<td class="num orange" title="API-billed totalNanoAiu from session.shutdown when present, else prompts × multiplier while live">'+fmtAIC(cliDisplayCredits)+'</td>' +
+      unattrCell('<td class="num" style="color:var(--muted)">'+fmtAIC(unattributedAic)+'</td>') +
       totalCell(totalAIC) +
     '</tr>';
 
@@ -1562,6 +1634,7 @@ function renderAgentSessions(agent, bounds, filteredSessions, rangeAicTotal) {
     +   '<th class="num" title="All-time — OMP scanner does not expose per-date data to the webview">Oh My Pi <span style="font-size:9px;color:var(--muted);font-weight:400">(all time)</span></th>'
     +   '<th class="num" title="All-time — Pi scanner does not expose per-date data to the webview">Pi <span style="font-size:9px;color:var(--muted);font-weight:400">(all time)</span></th>'
     +   '<th class="num" title="All-time — CLI scanner does not expose per-date data to the webview">Copilot CLI <span style="font-size:9px;color:var(--muted);font-weight:400">(all time)</span></th>'
+    +   unattrCell('<th class="num" title="Billed by GitHub but present in no local log — other devices/IDEs, github.com, the cloud agent, or rotated-away logs. Not a source this machine can scan.">Unattributed <span style="font-size:9px;color:var(--muted);font-weight:400">(no local log)</span></th>')
     +   '<th class="num">Total</th>'
     + '</tr></thead><tbody>'
     + tbody
@@ -1874,11 +1947,30 @@ function renderSubagents(subs) {
   const el=document.getElementById('subagent-section');
   if(!subs.length){el.innerHTML='';return;}
   const m={};
-  subs.forEach(s=>{m[s.agentName]=(m[s.agentName]||0)+s.count;});
-  const sorted=Object.entries(m).sort((a,b)=>b[1]-a[1]);
+  subs.forEach(s=>{
+    const row = m[s.agentName] || (m[s.agentName] = {count:0, tasks:[]});
+    row.count += s.count;
+    (s.descriptions||[]).forEach(d=>{ if(row.tasks.indexOf(d) === -1) row.tasks.push(d); });
+  });
+  const sorted=Object.entries(m).sort((a,b)=>b[1].count-a[1].count);
   let rows='';
-  sorted.forEach(([n,c])=>{rows+='<tr><td><span class="pill pill-orange">'+esc(n)+'</span></td><td class="num">'+c+'</td></tr>';});
-  el.innerHTML='<div class="chart-card" style="height:100%"><h3>Subagent Usage</h3><table><thead><tr><th>Subagent</th><th class="num">Invocations</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+  sorted.forEach(([n,r])=>{
+    const hint = n === 'default'
+      ? ' title="Invoked without an agentName, so it ran the calling agent itself — Copilot logs these as runSubagent-default."'
+      : n === 'unknown'
+        ? ' title="The tool call arguments could not be parsed, so the agent could not be identified."'
+        : '';
+    // The agent name is often just "default"; the task description is what
+    // actually identifies the run, and it is already in the tool-call args.
+    const shown = r.tasks.slice(0, 3);
+    const more = r.tasks.length - shown.length;
+    const taskCell = shown.length
+      ? shown.map(t=>'<span class="pill" title="'+esc(t)+'" style="margin:1px 3px 1px 0;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle">'+esc(t)+'</span>').join('')
+        + (more > 0 ? '<span style="color:var(--muted);font-size:10px">+'+more+' more</span>' : '')
+      : '<span style="color:var(--muted)">—</span>';
+    rows+='<tr><td><span class="pill pill-orange"'+hint+'>'+esc(n)+'</span></td><td>'+taskCell+'</td><td class="num">'+r.count+'</td></tr>';
+  });
+  el.innerHTML='<div class="chart-card" style="height:100%"><h3>Subagent Usage</h3><table><thead><tr><th>Subagent</th><th>Tasks</th><th class="num">Invocations</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
 }
 
 function renderHourly(turns) {
