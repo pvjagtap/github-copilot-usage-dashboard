@@ -1412,7 +1412,13 @@ function renderAIC(aic, bounds, filteredSessions) {
     // Per-machine figures are local-log derived, so their sum is a lower bound
     // on the account. GitHub's ledger is the real number; show the shortfall
     // rather than letting the table's total quietly contradict the hero tile.
-    const ledger = aic.quota ? aic.quota.creditsUsed : 0;
+    //
+    // quota_snapshots only ever reports the CURRENT cycle, while "combined"
+    // follows the range selector — so outside the cycle the two describe
+    // different spans and neither the remainder nor the account total may be
+    // stated against the range the table is showing.
+    const rangeIsCycle = bounds.start === aic.billingCycleStart && !bounds.end;
+    const ledger = rangeIsCycle && aic.quota ? aic.quota.creditsUsed : 0;
     const unattributedRow = ledger > 0 && ledger - combined > 0.005
       ? '<tr><td colspan="2" style="text-align:right;color:var(--muted)">'
         + 'Billed by GitHub, attributed to no system'
@@ -1431,7 +1437,6 @@ function renderAIC(aic, bounds, filteredSessions) {
     // amounts above are gross value at the same rate, not separate bills. It
     // is also a per-cycle allowance, so it is withheld for any range that is
     // not exactly the current cycle.
-    const rangeIsCycle = bounds.start === aic.billingCycleStart && !bounds.end;
     const chargeable = ledger > 0 ? ledger : combined;
     const effBudget = isPromo ? promo.promoBudget : (aic.monthlyBudget || 0);
     const overCombined = effBudget > 0 ? Math.max(0, chargeable - effBudget) : 0;

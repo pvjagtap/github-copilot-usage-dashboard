@@ -29,6 +29,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/diagnose-unknown-model-turns.js`: 16 unresolved turns before, 0 after.
   `tests/verify-chatsession-formats.js` gained a fixture for the mixed shape.
 
+- **The Systems footer stated cycle-only figures against the selected range.**
+  Credits per system follow the range selector (1.11.4), but `quota_snapshots`
+  only ever reports the current billing cycle and carries no per-day split to
+  reduce. The two were rendered side by side regardless of range, so "All Time"
+  printed a cycle-only **Account total (GitHub ledger)** beneath a column headed
+  `Credits (All Time)`, and derived the unattributed remainder by subtracting a
+  range figure from a cycle figure.
+
+  The account-total and unattributed rows are now withheld for any range that is
+  not exactly the current cycle, matching the overage row. `Σ systems` still
+  answers the selector, so the table no longer mixes two spans in one footer.
+  Pinned by the new `tests/verify-systems-table-range.js`, which executes the
+  real `renderAIC` out of the compiled webview rather than only parsing it.
+
 ## [1.11.7] - 2026-09-11
 
 ### Fixed
