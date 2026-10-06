@@ -25,6 +25,7 @@ import { loadCatalog as loadModelCatalog } from "./modelCatalog";
 import { registerSyncKeys, publishAndRead, combinedCredits } from "./machineSync";
 import { computeCacheHit } from "./cache";
 import { TtlTracker, getTtlConfig } from "./ttlTracker";
+import { CacheMissNotifier } from "./cacheMissNotifier";
 
 const OTEL_PORT = 14318;
 /**
@@ -75,6 +76,9 @@ let otelDebounceTimer: ReturnType<typeof setTimeout> | undefined;
 
 /** Prompt-cache TTL subsystem. Data-only — it never performs its own I/O. */
 let ttlTracker: TtlTracker | undefined;
+
+/** Tells the user when a request re-billed its whole context after a cache miss. */
+let cacheMissNotifier: CacheMissNotifier | undefined;
 
 /** Daily-limit subsystem */
 let limitTracker: DailyLimitTracker | undefined;
@@ -325,6 +329,7 @@ async function runScan(): Promise<void> {
     cachedDashData = undefined; // Invalidate cache
     // Data-only refresh of the cache countdown anchors — no extra file I/O.
     ttlTracker?.ingest(lastScan, lastCliScan);
+    cacheMissNotifier?.ingest(lastScan);
     const elapsed = Date.now() - t0;
     output.appendLine(
       `Scan: ${lastScan.stats.canonicalSessions} sessions, ${lastScan.stats.turnsStored} turns, ` +
@@ -580,6 +585,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     () => getAICConfig().overageCostPerCredit ?? 0.01
   );
   context.subscriptions.push(ttlTracker);
+  cacheMissNotifier = new CacheMissNotifier(
+    output,
+    Date.parse(activationTime),
+    () => {
+      const calc = createCalculatorFromConfig(getAICConfig());
+      return (model, prompt, cached) => calc.calculateCredits(model, prompt, 0, cached).totalCredits;
+    },
+    () => { void vscode.commands.executeCommand("copilotUsage.openDashboard"); },
+  );
   // Repaint on every tick so the countdown is live, not just on scan.
   context.subscriptions.push(
     ttlTracker.onChange(() => {

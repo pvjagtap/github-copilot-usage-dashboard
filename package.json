@@ -2,7 +2,7 @@
   "name": "copilot-usage-dashboard",
   "displayName": "Copilot Usage Dashboard",
   "description": "Live token usage dashboard for GitHub Copilot — prompt, output, and cached tokens with full analytics.",
-  "version": "1.11.13",
+  "version": "1.11.14",
   "publisher": "pvjagtap",
   "icon": "images/icon.png",
   "license": "MIT",
@@ -488,6 +488,28 @@
             "minimum": 1,
             "maximum": 100,
             "description": "Maximum number of sessions listed in the status-bar tooltip's Cache reuse block."
+          }
+        }
+      },
+      {
+        "title": "Copilot Usage — Cache Miss Alerts",
+        "properties": {
+          "copilotUsage.cacheMiss.enabled": {
+            "type": "boolean",
+            "default": true,
+            "markdownDescription": "Show a notification when a request missed the prompt cache and was billed for re-sending its whole context. A miss is detected from the debug logs: far less of the prompt was read from cache than the previous request left behind. The notification says whether the idle time exceeded the configured cache lifetime (`#copilotUsage.cacheTtl.ttl#`) or the prompt prefix changed inside it, and how many credits the miss cost over a warm cache. Works whether or not the cache countdown (`#copilotUsage.cacheTtl.enabled#`) is on."
+          },
+          "copilotUsage.cacheMiss.minPromptTokens": {
+            "type": "integer",
+            "default": 20000,
+            "minimum": 1000,
+            "description": "Ignore requests whose prompt is smaller than this many tokens. A small context is cheap to re-send, so a miss on it is not worth a notification."
+          },
+          "copilotUsage.cacheMiss.minWastedCredits": {
+            "type": "number",
+            "default": 1,
+            "minimum": 0,
+            "description": "Only notify when the miss cost at least this many credits more than a warm cache would have."
           }
         }
       }

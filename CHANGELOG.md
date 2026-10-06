@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.14] - 2026-10-06
+
+### Added
+
+- **Cache-miss notifications.** When a request misses the prompt cache and is
+  billed for re-sending its whole context, a notification now says so, with
+  the cause and the cost: whether the idle time exceeded the configured cache
+  lifetime (`copilotUsage.cacheTtl.ttl`, per provider) or the prompt prefix
+  changed inside it, how much of the context was re-read from cache against
+  what was expected, and how many credits the miss cost over a warm cache.
+  Detection is from the debug logs: a request whose prompt barely shrank but
+  read under half of what the previous request left cached. Chains are kept
+  per session, model and call site (a subagent or title call keeps its own
+  cache), a shrunken context (compaction) is not a miss, and requests with no
+  credit figure (BYOK) are skipped. Several misses found in one scan are one
+  toast; each is also written to the Copilot Usage output channel. On one
+  machine's October logs this found 26 misses worth 3,901 credits, 23 of them
+  after the cache TTL had lapsed. Settings: `copilotUsage.cacheMiss.enabled`
+  (on by default; the toast also has a "Turn Off" button),
+  `minPromptTokens` (20,000) and `minWastedCredits` (1). Works whether or not
+  the cache countdown is enabled. New `tests/verify-cache-miss.js`.
+
 ## [1.11.13] - 2026-10-06
 
 ### Fixed
