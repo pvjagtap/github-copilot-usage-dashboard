@@ -149,12 +149,16 @@ export interface CreditSummary {
 // 1 AI credit = $0.01 USD. All rates are AI Credits per 1 Million tokens.
 // Conversion: USD price × 100 = credits.
 //
-// Anthropic models include a separate "cache write" cost.
-// OpenAI/Google models: cache write = 0 (no separate charge).
+// Anthropic models and the GPT-5.6 / GPT-6 families include a separate "cache write" cost.
+// Earlier OpenAI models and Google/xAI/Moonshot: cache write = 0 (no separate charge).
 
 export const DEFAULT_MODEL_COSTS: ModelCostRate[] = [
   // ── Anthropic (includes cache write cost) ──
   // Source: https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing#anthropic
+  { model: "claude-fable-5.1",    inputCreditsPerMillion: 1000, outputCreditsPerMillion: 5000, cachedInputCreditsPerMillion: 25,  cacheWriteCreditsPerMillion: 1250, tier: "premium" },
+  { model: "claude-fable-5",      inputCreditsPerMillion: 1000, outputCreditsPerMillion: 5000, cachedInputCreditsPerMillion: 100, cacheWriteCreditsPerMillion: 1250, tier: "premium" },
+  // Opus 5.5 is cheaper than Opus 5 — it must stay a separate, longer key so it wins the substring match.
+  { model: "claude-opus-5.5",     inputCreditsPerMillion: 400, outputCreditsPerMillion: 2000, cachedInputCreditsPerMillion: 20,  cacheWriteCreditsPerMillion: 500, tier: "premium" },
   { model: "claude-opus-5",       inputCreditsPerMillion: 500, outputCreditsPerMillion: 2500, cachedInputCreditsPerMillion: 50, cacheWriteCreditsPerMillion: 625, tier: "premium" },
   { model: "claude-opus-4.8",     inputCreditsPerMillion: 500, outputCreditsPerMillion: 2500, cachedInputCreditsPerMillion: 50, cacheWriteCreditsPerMillion: 625, tier: "premium" },
   { model: "claude-opus-4.7",     inputCreditsPerMillion: 500, outputCreditsPerMillion: 2500, cachedInputCreditsPerMillion: 50, cacheWriteCreditsPerMillion: 625, tier: "premium" },
@@ -170,9 +174,16 @@ export const DEFAULT_MODEL_COSTS: ModelCostRate[] = [
   // Source: https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing#openai
   { model: "gpt-4o-mini",          inputCreditsPerMillion: 15,  outputCreditsPerMillion: 60,   cachedInputCreditsPerMillion: 7.5,  cacheWriteCreditsPerMillion: 0, tier: "base" },
   { model: "gpt-4o",               inputCreditsPerMillion: 250, outputCreditsPerMillion: 1000, cachedInputCreditsPerMillion: 125,  cacheWriteCreditsPerMillion: 0, tier: "base" },
-  { model: "gpt-5.6-sol",         inputCreditsPerMillion: 200, outputCreditsPerMillion: 1000, cachedInputCreditsPerMillion: 50,   cacheWriteCreditsPerMillion: 0, tier: "premium" },
-  { model: "gpt-5.6-terra",       inputCreditsPerMillion: 200, outputCreditsPerMillion: 1200, cachedInputCreditsPerMillion: 25,   cacheWriteCreditsPerMillion: 0, tier: "premium" },
-  { model: "gpt-5.6-luna",        inputCreditsPerMillion: 20,  outputCreditsPerMillion: 120,  cachedInputCreditsPerMillion: 10,   cacheWriteCreditsPerMillion: 0, tier: "base" },
+  // GPT-5.6 / GPT-6 families carry a cache-write charge (docs: "include a cache write cost in
+  // addition to cached input"). Rates are the ≤272K default tier; the >272K long-context tier
+  // (2x input/cache, higher output) is not modelled here — live CAPI catalog rates take precedence.
+  { model: "gpt-5.6-sol",         inputCreditsPerMillion: 400, outputCreditsPerMillion: 2000, cachedInputCreditsPerMillion: 40,   cacheWriteCreditsPerMillion: 500, tier: "premium" },
+  { model: "gpt-5.6-terra",       inputCreditsPerMillion: 200, outputCreditsPerMillion: 1200, cachedInputCreditsPerMillion: 20,   cacheWriteCreditsPerMillion: 250, tier: "premium" },
+  { model: "gpt-5.6-luna",        inputCreditsPerMillion: 20,  outputCreditsPerMillion: 120,  cachedInputCreditsPerMillion: 2,    cacheWriteCreditsPerMillion: 25,  tier: "base" },
+  { model: "gpt-6-astra",         inputCreditsPerMillion: 1000, outputCreditsPerMillion: 5000, cachedInputCreditsPerMillion: 100, cacheWriteCreditsPerMillion: 1250, tier: "premium" },
+  { model: "gpt-6-sol",           inputCreditsPerMillion: 200, outputCreditsPerMillion: 1000, cachedInputCreditsPerMillion: 20,   cacheWriteCreditsPerMillion: 250, tier: "premium" },
+  { model: "gpt-6-luna",          inputCreditsPerMillion: 10,  outputCreditsPerMillion: 50,   cachedInputCreditsPerMillion: 1,    cacheWriteCreditsPerMillion: 12.5, tier: "base" },
+  { model: "gpt-6.1-sol",         inputCreditsPerMillion: 200, outputCreditsPerMillion: 1000, cachedInputCreditsPerMillion: 10,   cacheWriteCreditsPerMillion: 250, tier: "premium" },
   { model: "gpt-5.5",             inputCreditsPerMillion: 500, outputCreditsPerMillion: 3000, cachedInputCreditsPerMillion: 50,   cacheWriteCreditsPerMillion: 0, tier: "premium" },
   { model: "gpt-5.4",             inputCreditsPerMillion: 250, outputCreditsPerMillion: 1500, cachedInputCreditsPerMillion: 25,   cacheWriteCreditsPerMillion: 0, tier: "premium" },
   { model: "gpt-5.4-mini",        inputCreditsPerMillion: 75,  outputCreditsPerMillion: 450,  cachedInputCreditsPerMillion: 7.5,  cacheWriteCreditsPerMillion: 0, tier: "base" },
@@ -185,6 +196,9 @@ export const DEFAULT_MODEL_COSTS: ModelCostRate[] = [
 
   // ── Google ──
   // Source: https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing#google
+  // Flash 3.7 / 3.8: promotional pricing through 2026-12-31 (post-promo price unpublished).
+  { model: "gemini-3.8-flash",    inputCreditsPerMillion: 75,  outputCreditsPerMillion: 375,  cachedInputCreditsPerMillion: 7.5,  cacheWriteCreditsPerMillion: 0, tier: "base" },
+  { model: "gemini-3.7-flash",    inputCreditsPerMillion: 75,  outputCreditsPerMillion: 375,  cachedInputCreditsPerMillion: 7.5,  cacheWriteCreditsPerMillion: 0, tier: "base" },
   { model: "gemini-3.6-flash",    inputCreditsPerMillion: 75,  outputCreditsPerMillion: 375,  cachedInputCreditsPerMillion: 15,   cacheWriteCreditsPerMillion: 0, tier: "base" },
   { model: "gemini-3.5-flash",    inputCreditsPerMillion: 150, outputCreditsPerMillion: 900,  cachedInputCreditsPerMillion: 15,   cacheWriteCreditsPerMillion: 0, tier: "base" },
   { model: "gemini-3.1-pro",      inputCreditsPerMillion: 200, outputCreditsPerMillion: 1200, cachedInputCreditsPerMillion: 20,   cacheWriteCreditsPerMillion: 0, tier: "premium" },
@@ -196,7 +210,12 @@ export const DEFAULT_MODEL_COSTS: ModelCostRate[] = [
   { model: "mai-code-1.1-flash",  inputCreditsPerMillion: 20,  outputCreditsPerMillion: 120,  cachedInputCreditsPerMillion: 2,    cacheWriteCreditsPerMillion: 0, tier: "base" },
 
   // ── xAI ──
-  { model: "grok-4.5",            inputCreditsPerMillion: 200, outputCreditsPerMillion: 600,  cachedInputCreditsPerMillion: 20,   cacheWriteCreditsPerMillion: 0, tier: "base" },
+  { model: "grok-4.5",            inputCreditsPerMillion: 200, outputCreditsPerMillion: 600,  cachedInputCreditsPerMillion: 50,   cacheWriteCreditsPerMillion: 0, tier: "base" },
+  { model: "grok-4.6",            inputCreditsPerMillion: 200, outputCreditsPerMillion: 600,  cachedInputCreditsPerMillion: 50,   cacheWriteCreditsPerMillion: 0, tier: "base" },
+  { model: "grok-4.7",            inputCreditsPerMillion: 200, outputCreditsPerMillion: 600,  cachedInputCreditsPerMillion: 50,   cacheWriteCreditsPerMillion: 0, tier: "base" },
+
+  // ── Moonshot AI ──
+  { model: "kimi-k3",             inputCreditsPerMillion: 300, outputCreditsPerMillion: 1500, cachedInputCreditsPerMillion: 30,   cacheWriteCreditsPerMillion: 0, tier: "premium" },
 
   // ── Fine-tuned (GitHub) ──
   { model: "raptor-mini",         inputCreditsPerMillion: 25,  outputCreditsPerMillion: 200,  cachedInputCreditsPerMillion: 2.5,  cacheWriteCreditsPerMillion: 0, tier: "base" },

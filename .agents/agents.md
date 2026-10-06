@@ -56,6 +56,7 @@ Three input sources feed the AIC dashboard. Any change to the parser must keep t
 - `attrs.copilotUsageNanoAiu` is the exact API-billed credit value times 1e9. Always prefer it over rate-based calculations when present (`hasActualAic` path).
 - `attrs.cachedTokens` is cache-read tokens (optional, mainly Anthropic traces). Don't conflate with `cacheWrite`.
 - Per-event `entry.ts` drives `debugLastRequestTs` / `debugLastRequestAic` for the `AIC (last req)` widget -- it must be the single most-recent `llm_request`, never a turn sum.
+- **`main.jsonl` is head-truncated by Copilot** (first line is a half-written fragment; early `llm_request`s and their `copilotUsageNanoAiu` are gone). `chatSessions` `requests[i].copilotCredits` is VS Code's own per-request total and equals the debug-log sum for intact sessions, so `recoverTruncatedDebugCredits` takes the session shortfall back from it. Never let the debug-log overlay overwrite `debugAicCredits` without this reconciliation, and never widen it beyond requests that began before the log's first surviving `llm_request` (a log lagging the live tail must not be topped up). `Turn.chatCredits` / `chatStartMs` exist for this; do not write `chatCredits` into `debugAicCredits` for kind=0 sessions.
 
 ### 3. Child logs: `title-*.jsonl` and `runSubagent-*.jsonl` -> [src/scanner.ts](src/scanner.ts) `parseDebugLogDir`
 

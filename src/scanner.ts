@@ -98,6 +98,14 @@ export interface Turn {
   /** Actual AI credits for this turn from API responses (nano-AIU / 1e9). 0 if not available. */
   debugAicCredits: number;
   /**
+   * VS Code's own `copilotCredits` for the user request behind this turn (every
+   * LLM call of the request, subagents included) and the request's start time.
+   * `debugAicCredits` is overwritten by the debug-log figure, so these are kept
+   * to detect credits whose `llm_request` lines the debug log no longer holds.
+   */
+  chatCredits?: number;
+  chatStartMs?: number;
+  /**
    * AI credits for the LAST single llm_request in this turn (not the sum).
    * Used by the dashboard's `AIC (last req)` widget so it shows one API
    * call's bill, not the entire turn's. 0 if not available.
@@ -759,6 +767,21 @@ function parseSessionContent(
     }
   }
 
+  // A kind=0 session builds its turns from `requests/N/result` ops, which carry
+  // no credits. The replayed request does (`copilotCredits`, `timestamp`), so
+  // record VS Code's own per-request figure for truncation recovery. It is not
+  // written to `debugAicCredits`: a turn the debug log never overlays would
+  // then be counted on top of the log's own turns.
+  if (sawKind0) {
+    for (const t of turns) {
+      const replayed = replayRequests[t.turnIndex];
+      if (isObj(replayed)) {
+        t.chatCredits = num(replayed, "copilotCredits");
+        t.chatStartMs = num(replayed, "timestamp");
+      }
+    }
+  }
+
   // ── Current format: no kind=0 header ──────────────────────
   // The legacy branches above only see `requests/N/result`, so they miss the
   // separate promptTokens / completionTokens / copilotCredits ops entirely.
@@ -834,6 +857,8 @@ function parseSessionContent(
         debugCachedTokens: 0,
         debugLlmCalls: 0,
         debugAicCredits: credits,
+        chatCredits: credits,
+        chatStartMs: reqTs,
         debugLastRequestAic: 0,
         debugLastRequestTs: "",
         toolCallRounds: isArr(metaObj.toolCallRounds) ? metaObj.toolCallRounds.length : 0,
@@ -1760,9 +1785,14 @@ export async function parseDebugLogDir(sessionDir: string): Promise<DebugLogData
 async function discoverDebugLogsCached(wsRoot: string): Promise<Map<string, DebugLogData>> {
   const map = new Map<string, DebugLogData>();
   const dirs = await listWorkspaceDirsSorted(wsRoot);
+  // Empty-window sessions (no folder open) keep their debug logs under the
+  // User dir's globalStorage, not under any workspace hash.
+  const dlDirs = [
+    ...dirs.map(entry => path.join(wsRoot, entry.name, "GitHub.copilot-chat", "debug-logs")),
+    path.join(path.dirname(wsRoot), "globalStorage", "github.copilot-chat", "debug-logs"),
+  ];
 
-  await mapConcurrent(dirs, 16, async entry => {
-    const dlDir = path.join(wsRoot, entry.name, "GitHub.copilot-chat", "debug-logs");
+  await mapConcurrent(dlDirs, 16, async dlDir => {
     if (!(await isDirectory(dlDir))) {
       return;
     }
@@ -1793,6 +1823,163 @@ async function discoverDebugLogsCached(wsRoot: string): Promise<Map<string, Debu
   });
 
   return map;
+}
+
+// ─── Recovery of credits dropped from truncated debug logs ────
+//
+// Copilot caps each debug-log `main.jsonl` by cutting off its HEAD (the file
+// then opens on a half-written line). Every `llm_request` before the cut is
+// gone, and with it the `copilotUsageNanoAiu` GitHub billed for it. The
+// chatSession file still records `copilotCredits` per user request, and for
+// intact sessions that figure equals the debug-log sum to the cent, so the
+// shortfall is billed credit the debug log lost, not an estimate.
+
+/** Mirrors `AIC_EFFECTIVE_DATE` in dashboardData.ts, which imports this module and so cannot be imported here. */
+const AIC_BILLING_START_MS = Date.UTC(2026, 5, 1);
+
+/** Below this a difference is float noise, not a lost request. */
+const CREDIT_EPSILON = 0.005;
+
+/** `debugName` of a request synthesised from chatSession credits rather than read from a debug log. */
+export const RECOVERED_DEBUG_NAME = "chatSession.copilotCredits";
+
+export interface RecoveredCredit {
+  turnIndex: number;
+  startMs: number;
+  model: string;
+  credits: number;
+}
+
+/**
+ * Credits the scanner currently counts for one turn, mirroring the branch order
+ * every consumer uses: per-request records first, else the turn-level figure.
+ */
+function turnCountedCredits(t: Turn): number {
+  if (t.debugRequests && t.debugRequests.length > 0) {
+    let sum = 0;
+    for (const req of t.debugRequests) {
+      if (Date.parse(req.timestamp) >= AIC_BILLING_START_MS) {
+        sum += req.nanoAiu / 1_000_000_000;
+      }
+    }
+    return sum;
+  }
+  return Date.parse(t.timestamp) >= AIC_BILLING_START_MS ? t.debugAicCredits : 0;
+}
+
+/**
+ * Credits present in the chatSession but absent from the (head-truncated) debug
+ * log of the same session, split over the requests that began before the log's
+ * first surviving `llm_request`.
+ *
+ * The session-level shortfall (`chatSession total − what the scanner counts`) is
+ * the hard cap, so a per-request misattribution can shift credit between days
+ * but never add any. Only requests that started before the first surviving
+ * debug request qualify: a debug log that merely lags the chatSession on the
+ * live tail must not be topped up, or the dashboard would overstate until the
+ * log catches up.
+ */
+export function recoverTruncatedDebugCredits(
+  chatTurns: ReadonlyArray<Turn>,
+  debugRequests: ReadonlyArray<DebugRequest>,
+  countedCredits: number
+): RecoveredCredit[] {
+  const eligible = chatTurns
+    .filter(t => (t.chatCredits ?? 0) > 0 && (t.chatStartMs ?? 0) >= AIC_BILLING_START_MS)
+    .sort((a, b) => (a.chatStartMs as number) - (b.chatStartMs as number));
+  if (eligible.length === 0 || debugRequests.length === 0) {
+    return [];
+  }
+
+  let chatTotal = 0;
+  for (const t of eligible) {
+    chatTotal += t.chatCredits as number;
+  }
+  const shortfall = chatTotal - countedCredits;
+  if (shortfall <= CREDIT_EPSILON) {
+    return [];
+  }
+
+  // A debug request belongs to the latest chat request that started at or
+  // before it; anything earlier (title generation) joins the first request.
+  const starts = eligible.map(t => t.chatStartMs as number);
+  const assigned = new Array<number>(eligible.length).fill(0);
+  let firstDebugMs = Infinity;
+  for (const req of debugRequests) {
+    const ts = Date.parse(req.timestamp);
+    if (!Number.isFinite(ts)) {
+      continue;
+    }
+    if (ts < firstDebugMs) {
+      firstDebugMs = ts;
+    }
+    let lo = 0;
+    let hi = starts.length - 1;
+    let idx = 0;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (starts[mid] <= ts) {
+        idx = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    assigned[idx] += req.nanoAiu / 1_000_000_000;
+  }
+
+  const weights: number[] = [];
+  let weightTotal = 0;
+  for (let i = 0; i < eligible.length; i++) {
+    const t = eligible[i];
+    // A turn with no debug overlay already contributes its own chatCredits.
+    const lost =
+      starts[i] < firstDebugMs && t.debugRequests && t.debugRequests.length > 0
+        ? (t.chatCredits as number) - assigned[i]
+        : 0;
+    const w = lost > CREDIT_EPSILON ? lost : 0;
+    weights.push(w);
+    weightTotal += w;
+  }
+  if (weightTotal <= CREDIT_EPSILON) {
+    return [];
+  }
+
+  const scale = Math.min(weightTotal, shortfall) / weightTotal;
+  const out: RecoveredCredit[] = [];
+  for (let i = 0; i < eligible.length; i++) {
+    if (weights[i] > 0) {
+      out.push({
+        turnIndex: eligible[i].turnIndex,
+        startMs: starts[i],
+        model: eligible[i].modelFamily,
+        credits: weights[i] * scale,
+      });
+    }
+  }
+  return out;
+}
+
+/** Fold a recovered request into a turn through every field consumers read. */
+function applyRecoveredCredit(t: Turn, r: RecoveredCredit): void {
+  const nanoAiu = r.credits * 1_000_000_000;
+  t.debugAicCredits += r.credits;
+  t.debugRequests = [
+    ...(t.debugRequests ?? []),
+    {
+      timestamp: new Date(r.startMs).toISOString(),
+      model: r.model,
+      prompt: 0,
+      output: 0,
+      cached: 0,
+      nanoAiu,
+      debugName: RECOVERED_DEBUG_NAME,
+    },
+  ];
+  const byModel: Record<string, DebugModelTotals> = { ...(t.debugByModel ?? {}) };
+  const prior = byModel[r.model] ?? { prompt: 0, output: 0, cached: 0, calls: 0, nanoAiu: 0 };
+  byModel[r.model] = { ...prior, nanoAiu: prior.nanoAiu + nanoAiu };
+  t.debugByModel = byModel;
 }
 
 // ─── File-level mtime cache for incremental scanning ──────────
@@ -2036,6 +2223,21 @@ export async function scanWorkspaceStorage(workspaceStorageOverride?: string): P
           toolCallResults: 0,
           workspaceName: "",
         });
+      }
+    }
+
+    // The debug log was cut at its head: take back the credits it lost from
+    // the chatSession's own per-request figure.
+    const sessionTurns = turns.filter(t => t.sessionId === s.sessionId);
+    let counted = 0;
+    for (const t of sessionTurns) {
+      counted += turnCountedCredits(t);
+    }
+    for (const r of recoverTruncatedDebugCredits(sessionTurns, dbg.requests, counted)) {
+      const target = sessionTurns.find(t => t.turnIndex === r.turnIndex && t.chatStartMs === r.startMs);
+      if (target) {
+        applyRecoveredCredit(target, r);
+        s.debugTotalAicCredits += r.credits;
       }
     }
   }

@@ -145,14 +145,23 @@ function parseAgentSession(
     return null;
   }
 
-  // Parse session header (first line)
-  let header: unknown;
-  try {
-    header = JSON.parse(lines[0]);
-  } catch {
-    return null;
+  // The header is the first `type: "session"` record. Current OMP writes a padded
+  // `type: "title"` record on line 1, so it is not always line 0. Pi writes it first.
+  let header: Record<string, unknown> | null = null;
+  let headerIdx = -1;
+  for (let i = 0; i < Math.min(lines.length, 5); i++) {
+    try {
+      const rec: unknown = JSON.parse(lines[i]);
+      if (isObj(rec) && rec["type"] === "session") {
+        header = rec;
+        headerIdx = i;
+        break;
+      }
+    } catch {
+      // partial / non-JSON line — keep looking
+    }
   }
-  if (!isObj(header) || header["type"] !== "session") {
+  if (!header) {
     return null;
   }
 
@@ -177,7 +186,7 @@ function parseAgentSession(
   let lastTs = 0;
   const modelMap = new Map<string, AgentModelTokens>();
 
-  for (let i = 1; i < lines.length; i++) {
+  for (let i = headerIdx + 1; i < lines.length; i++) {
     const line = lines[i];
     if (!line) {
       continue;

@@ -70,7 +70,7 @@ for (const [id, input, output, tier] of [
 
 console.log("\n== Test 2: unseen point releases borrow their family's newest rate ==");
 for (const [id, expectFrom, input, output, tier] of [
-  ["claude-opus-6", "claude-opus-5", 500, 2500, "premium"],
+  ["claude-opus-6", "claude-opus-5.5", 400, 2000, "premium"],
   ["claude-haiku-5", "claude-haiku-4.5", 100, 500, "base"],
   ["gpt-5.7", "gpt-5.5", 500, 3000, "premium"],
   ["gpt-5.7-codex", "gpt-5.3-codex", 175, 1400, "premium"],
@@ -105,8 +105,8 @@ ok(
 
 console.log("\n== Test 5: family rates price real traffic, not gpt-4.1 defaults ==");
 const usage = calc.calculateCredits("claude-opus-6", 1_000_000, 100_000, 0);
-ok("claude-opus-6 input priced at 500/1M (not the 200/1M unknown default)", usage.inputCredits === 500, `${usage.inputCredits}`);
-ok("claude-opus-6 output priced at 2500/1M (not the 800/1M unknown default)", usage.outputCredits === 250, `${usage.outputCredits}`);
+ok("claude-opus-6 input priced at 400/1M (newest Opus rate, not the 200/1M unknown default)", usage.inputCredits === 400, `${usage.inputCredits}`);
+ok("claude-opus-6 output priced at 2000/1M (not the 800/1M unknown default)", usage.outputCredits === 200, `${usage.outputCredits}`);
 ok("claude-opus-6 carries the premium tier", usage.tier === "premium", usage.tier);
 
 if (failed > 0) {

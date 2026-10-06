@@ -5,6 +5,59 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.10] - 2026-10-06
+
+### Fixed
+
+- **Credits missing from long VS Code sessions.** Copilot caps each
+  `debug-logs/<sid>/main.jsonl` by cutting off its head (the file opens on a
+  half-written line), so the `llm_request` lines — and the
+  `copilotUsageNanoAiu` GitHub billed — of a long session's early requests are
+  gone. The scanner then overwrote each turn's credits with the debug-log
+  figure, so those requests were billed but never shown. The chatSession file
+  keeps VS Code's own per-request `copilotCredits`, which equals the debug-log
+  sum to the cent for intact sessions (19 of 21 October sessions checked). The
+  scanner now recovers the shortfall from it, dated and modelled at the lost
+  request. Recovery is capped by the session's total shortfall and only covers
+  requests that began before the log's first surviving `llm_request`, so a log
+  that merely lags the live tail is never topped up. Two October sessions
+  accounted for 3,192.5 credits (about half the gap to GitHub's ledger) and two
+  September sessions for 6,544. New `tests/verify-truncated-debug-recovery.js`.
+- **Empty-window sessions' debug logs were never read.** Sessions opened with
+  no folder keep their debug logs under `globalStorage/github.copilot-chat/
+  debug-logs`; only per-workspace folders were scanned, so their exact
+  `copilotUsageNanoAiu` was lost.
+
+## [1.11.9] - 2026-10-06
+
+### Fixed
+
+- **OMP sessions vanished from the dashboard.** Current OMP writes a padded
+  `type: "title"` record on line 1 and the `type: "session"` header on line 2.
+  `parseAgentSession()` only accepted the header on line 0, so every session
+  from such an OMP version was dropped (0 OMP sessions). The header is now the
+  first `type: "session"` record within the first five lines; Pi, which writes
+  it first, is unaffected. New `tests/verify-agent-title-record-header.js`.
+- **Rate table disagreed with what GitHub bills.** Checked against 4,620 real
+  `copilotUsageNanoAiu` figures from Copilot Chat debug logs:
+  - `claude-opus-5.5` matched the `claude-opus-5` key and was priced +25%
+    (500/2500 instead of 400/2000, cache read 50 instead of 20, cache write 625
+    instead of 500). It now has its own, longer key.
+  - `gpt-5.6-sol` / `-terra` / `-luna` were priced at roughly half of the real
+    input/output rate (e.g. Sol 200/1000 instead of 400/2000) with no cache-write
+    rate. The GPT-5.6 / GPT-6 families bill a cache write; corrected.
+  - Added `claude-fable-5` / `-5.1`, `gpt-6-astra` / `-sol` / `-luna`,
+    `gpt-6.1-sol`, `gemini-3.7-flash` / `-3.8-flash` (promotional through
+    2026-12-31), `grok-4.6` / `-4.7`, `kimi-k3`; `grok-4.5` cached input is 50,
+    not 20.
+  - Family fallback now inherits the newest Opus rate (5.5), so an unseen
+    `claude-opus-6` is priced at 400/2000.
+
+  The >272K / >200K long-context tiers are not modelled in this table; the live
+  CAPI catalog rates and `copilotUsageNanoAiu` take precedence where present.
+  New `tests/verify-rates-reproduce-billed-credits.js` pins the table to six
+  real GitHub-billed requests.
+
 ## [1.11.8] - 2026-09-11
 
 ### Fixed
