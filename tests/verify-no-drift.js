@@ -474,10 +474,15 @@ function aggregateScannerView(scan, sessionIds) {
   // validates the per-workspace slice; this one validates that the dashboard
   // doesn't drop or double-count anything when projecting scanner turns into
   // its cycle aggregate.
+  // The dashboard aggregates the CURRENT billing cycle only, so the slice to
+  // compare against is that cycle, not everything since the AIC start date.
+  const dashCycleStart = dash.aicSummary.billingCycleStart;
+  const dashCycleEnd = dash.aicSummary.billingCycleEnd;
   let svFullCycleCredits = 0;
   for (const t of scan.turns) {
     if (!t.timestamp) continue;
-    if (t.timestamp.slice(0, 10) < cycleStart) continue;
+    const day = t.timestamp.slice(0, 10);
+    if (day < dashCycleStart || day > dashCycleEnd) continue;
     svFullCycleCredits += t.debugAicCredits || 0;
   }
   eqFloatLoose(

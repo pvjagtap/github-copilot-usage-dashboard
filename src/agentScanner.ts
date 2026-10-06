@@ -82,6 +82,18 @@ export interface AgentSessionData {
   modelBreakdown: Record<string, AgentModelTokens>;
   firstTs: number; // epoch ms
   lastTs: number; // epoch ms
+  /**
+   * Path of the session that spawned this one. Set on OMP subagent transcripts
+   * (`<project>/<sessionId>/<Agent>.jsonl`); such a file is its own session
+   * with its own usage, never a copy of anything in the parent.
+   */
+  parentSession?: string;
+  /**
+   * Dated Copilot-routed calls that recorded a cost, in credits. Lets the
+   * ledger-attribution code line each call up with the moment GitHub's
+   * ledger rose; third-party providers bill elsewhere and are left out.
+   */
+  callTimeline?: Array<{ ts: number; credits: number }>;
 }
 
 export interface AgentScanResult {
@@ -185,6 +197,7 @@ function parseAgentSession(
   let firstTs = 0;
   let lastTs = 0;
   const modelMap = new Map<string, AgentModelTokens>();
+  const callTimeline: Array<{ ts: number; credits: number }> = [];
 
   for (let i = headerIdx + 1; i < lines.length; i++) {
     const line = lines[i];
@@ -287,6 +300,9 @@ function parseAgentSession(
         lastTs = ts;
       }
     }
+    if (ts > 0 && cost > 0 && /github|copilot/i.test(callProvider || "")) {
+      callTimeline.push({ ts, credits: cost });
+    }
   }
 
   if (llmCalls === 0) {
@@ -329,6 +345,8 @@ function parseAgentSession(
     modelBreakdown: Object.fromEntries(modelMap),
     firstTs,
     lastTs,
+    parentSession: typeof header["parentSession"] === "string" ? header["parentSession"] : undefined,
+    callTimeline,
   };
 }
 
@@ -384,7 +402,21 @@ async function scanDirectory(
       readSession(path.join(projPath, file))
     );
 
-    return sessions.filter((s): s is AgentSessionData => s !== null);
+    // OMP also keeps every subagent's transcript in a directory named after the
+    // parent session. Those calls are billed separately and appear nowhere in
+    // the parent file, so skipping the directory dropped their usage entirely.
+    const subagentDirs = files.filter(f => !f.endsWith(".jsonl"));
+    const subagentSessions = await mapConcurrent(subagentDirs, 8, async dir => {
+      const dirPath = path.join(projPath, dir);
+      const dirStat = await fsp.stat(dirPath).catch(() => null);
+      if (!dirStat?.isDirectory()) {
+        return [];
+      }
+      const names = (await readdirSafe(dirPath)).filter(n => n.endsWith(".jsonl"));
+      return mapConcurrent(names, 8, name => readSession(path.join(dirPath, name)));
+    });
+
+    return [...sessions, ...subagentSessions.flat()].filter((s): s is AgentSessionData => s !== null);
   });
 
   const rootSessions = await mapConcurrent(rootFiles, 8, file =>
@@ -427,12 +459,16 @@ export async function scanAgentSessions(): Promise<AgentScanResult> {
     piAllTimeLlmCalls = 0,
     piAllTimeTokens = 0;
   for (const s of ompRaw) {
-    ompAllTimeSessions++;
+    if (!s.parentSession) {
+      ompAllTimeSessions++;
+    }
     ompAllTimeLlmCalls += s.llmCalls;
     ompAllTimeTokens += s.totalTokens;
   }
   for (const s of piRaw) {
-    piAllTimeSessions++;
+    if (!s.parentSession) {
+      piAllTimeSessions++;
+    }
     piAllTimeLlmCalls += s.llmCalls;
     piAllTimeTokens += s.totalTokens;
   }
@@ -469,8 +505,8 @@ export async function scanAgentSessions(): Promise<AgentScanResult> {
     totalTokens: totalInput + totalOutput + totalCacheRead + totalCacheWrite,
     totalLlmCalls,
     totalPremiumRequests: totalPremium,
-    ompSessionCount: billable.filter(s => s.source === "omp").length,
-    piSessionCount: billable.filter(s => s.source === "pi").length,
+    ompSessionCount: billable.filter(s => s.source === "omp" && !s.parentSession).length,
+    piSessionCount: billable.filter(s => s.source === "pi" && !s.parentSession).length,
     ompAllTimeSessions,
     ompAllTimeLlmCalls,
     ompAllTimeTokens,

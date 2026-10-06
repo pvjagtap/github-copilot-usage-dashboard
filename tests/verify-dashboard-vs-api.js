@@ -8,6 +8,11 @@
  * with itself. Same contract as tests/scan-june-workspace.ts but in plain
  * JS so it runs without tsx.
  *
+ * Truth for VS Code is the debug-log nanoAiu PLUS what each head-truncated log
+ * lost, re-derived here from the chatSession's own `copilotCredits`. Truth for
+ * OMP/Pi is the Copilot-routed spend only (third-party providers bill
+ * elsewhere), scoped to the current billing cycle like the dashboard.
+ *
  *   node tests/verify-dashboard-vs-api.js
  *
  * Pass criteria:
@@ -132,6 +137,142 @@ function parseSessionDir(sessDir) {
   return calls;
 }
 
+// ── chatSession reconciliation (independent of scanner.ts) ──
+//
+// Copilot cuts the HEAD off long debug logs, so their early llm_request lines
+// (and nanoAiu) are gone, but the chatSession keeps VS Code's own per-request
+// `copilotCredits`. Truth for such a session is the chatSession figure for the
+// requests the log lost; this re-derives that without importing the scanner.
+
+function replayChatRequests(file) {
+  let content;
+  try { content = fs.readFileSync(file, "utf-8"); } catch { return []; }
+  const reqs = [];
+  const asReq = r => (r && typeof r === "object" ? { ...r } : {});
+  for (const line of content.split("\n")) {
+    if (!line.trim()) continue;
+    let e;
+    try { e = JSON.parse(line); } catch { continue; }
+    const k = e.k;
+    if (e.kind === 0 && e.v && Array.isArray(e.v.requests)) {
+      for (const r of e.v.requests) reqs.push(asReq(r));
+    } else if (e.kind === 2 && Array.isArray(k) && k.length === 1 && k[0] === "requests" && Array.isArray(e.v)) {
+      for (const r of e.v) reqs.push(asReq(r));
+    } else if (e.kind === 1 && Array.isArray(k) && k.length === 3 && k[0] === "requests" && Number.isInteger(k[1])) {
+      while (reqs.length <= k[1]) reqs.push({});
+      reqs[k[1]][k[2]] = e.v;
+    }
+  }
+  return reqs
+    .filter(r => typeof r.timestamp === "number" && r.timestamp > 0)
+    .map(r => ({
+      start: r.timestamp,
+      credits: typeof r.copilotCredits === "number" ? r.copilotCredits : 0,
+      model: String(r.modelId || "").split("/").pop().toLowerCase(),
+    }))
+    .sort((a, b) => a.start - b.start);
+}
+
+/** Map "day|model" → nanoAiu the debug log lost for this session. */
+function chatRecovery(sessDir, calls) {
+  const out = new Map();
+  // <ws>/GitHub.copilot-chat/debug-logs/<sid> → <ws>/chatSessions/<sid>.jsonl
+  const wsDir = path.resolve(sessDir, "..", "..", "..");
+  const file = path.join(wsDir, "chatSessions", path.basename(sessDir) + ".jsonl");
+  if (!fs.existsSync(file) || calls.length === 0) return out;
+
+  const reqs = replayChatRequests(file)
+    .filter(r => new Date(r.start).toISOString().slice(0, 10) >= AIC_EFFECTIVE_DATE);
+  const chatTotal = reqs.reduce((s, r) => s + r.credits, 0);
+  const debugTotal = calls.reduce((s, c) => s + c.nanoAiu, 0) / 1e9;
+  const shortfall = chatTotal - debugTotal;
+  if (shortfall <= 0.005) return out;
+
+  // Each debug call belongs to the latest chat request that started at or before it.
+  const assigned = reqs.map(() => 0);
+  let firstDebug = Infinity;
+  for (const c of calls) {
+    const ts = Date.parse(c.timestamp);
+    if (!(ts > 0)) continue;
+    firstDebug = Math.min(firstDebug, ts);
+    let idx = 0;
+    for (let j = 0; j < reqs.length && reqs[j].start <= ts; j++) idx = j;
+    assigned[idx] += c.nanoAiu / 1e9;
+  }
+  // Only requests that began before the log's first surviving call were cut off.
+  const lost = reqs.map((r, i) => {
+    const d = r.start < firstDebug ? r.credits - assigned[i] : 0;
+    return d > 0.005 ? d : 0;
+  });
+  const lostTotal = lost.reduce((s, x) => s + x, 0);
+  if (lostTotal <= 0.005) return out;
+  const scale = Math.min(lostTotal, shortfall) / lostTotal;
+  reqs.forEach((r, i) => {
+    if (lost[i] <= 0) return;
+    const key = new Date(r.start).toISOString().slice(0, 10) + "|" + r.model;
+    out.set(key, (out.get(key) ?? 0) + lost[i] * scale * 1e9);
+  });
+  return out;
+}
+
+// ── BYOK catalog ─────────────────────────────────────────────
+//
+// The live extension knows which model ids the user declared under a
+// non-Copilot vendor (chatLanguageModels.json) and so splits a colliding id
+// such as claude-opus-5 into its billed and BYOK halves. A bare node process
+// has no catalog, which would price every zero-credit BYOK wrapper request at
+// Copilot rates, so load the same file.
+function seedUserCatalog() {
+  const root = getWorkspaceStorageCandidates().find(p => { try { return fs.existsSync(p); } catch { return false; } });
+  if (!root) return;
+  let providers;
+  try {
+    providers = JSON.parse(fs.readFileSync(path.join(path.dirname(root), "chatLanguageModels.json"), "utf-8"));
+  } catch {
+    return;
+  }
+  const byId = new Map();
+  for (const p of Array.isArray(providers) ? providers : []) {
+    if (!p || p.vendor === "copilot" || !Array.isArray(p.models)) continue;
+    for (const m of p.models) {
+      if (m && typeof m.id === "string") {
+        byId.set(m.id.toLowerCase(), { id: m.id.toLowerCase(), billable: true, userThirdParty: true, multiplier: 1, source: "capi" });
+      }
+    }
+  }
+  require(path.join(OUT, "modelCatalog.js")).__setCatalogForTesting({
+    fetchedAt: Date.now(), byId, cdnProviders: {}, userVendorByModelId: new Map(),
+  });
+}
+
+// ── OMP / Pi credits GitHub bills ────────────────────────────
+//
+// Copilot-routed calls only: a third-party provider (Azure Foundry, Ollama, …)
+// is billed by that vendor, never by GitHub, so its tokens must not be priced
+// at Copilot rates. Where the agent recorded `usage.cost` it is the ledger;
+// only calls it did not price are estimated from the rate table.
+function agentBilledCredits(session, calculator) {
+  const rows = [];
+  for (const stats of Object.values(session.modelBreakdown)) {
+    const provider = (stats.provider || session.provider || "").toLowerCase();
+    if (provider.length > 0 && !provider.includes("github") && !provider.includes("copilot")) continue;
+    const model = stats.model;
+    const u = stats.unpriced
+      ? stats.unpriced
+      : stats.costCredits > 0
+        ? null
+        : { input: stats.input, output: stats.output, cacheRead: stats.cacheRead, cacheWrite: stats.cacheWrite };
+    const estimate = u
+      ? calculator.calculateCredits(model, u.input + u.cacheRead + u.cacheWrite, u.output, u.cacheRead, u.cacheWrite).totalCredits
+      : 0;
+    const credits = stats.costCredits + estimate;
+    if (credits <= 0) continue;
+    const rate = calculator.findModelRate(model);
+    rows.push({ model: (rate ? rate.model : model).toLowerCase(), credits });
+  }
+  return rows;
+}
+
 // ─── Run the audit ──────────────────────────────────────────
 
 (async () => {
@@ -142,6 +283,7 @@ function parseSessionDir(sessDir) {
   // ── VS Code truth: sum nanoAiu directly from raw debug-log jsonl ──
   const t0 = Date.now();
   const sessionDirs = discoverDebugLogDirs();
+  seedUserCatalog();
   console.log(`\nDiscovered ${sessionDirs.length} debug-log session dirs (VS Code)`);
 
   function collectVSCodeTruth() {
@@ -149,30 +291,37 @@ function parseSessionDir(sessDir) {
     let nano = 0;
     const byDay = new Map();
     const byModel = new Map();
+    const byDayModel = new Map(); // "day|model" → nanoAiu
     let lastTs = "";
     let lastAiu = 0;
+    const add = (day, model, nanoAiu) => {
+      nano += nanoAiu;
+      byDay.set(day, (byDay.get(day) ?? 0) + nanoAiu);
+      byModel.set(model, (byModel.get(model) ?? 0) + nanoAiu);
+      byDayModel.set(day + "|" + model, (byDayModel.get(day + "|" + model) ?? 0) + nanoAiu);
+    };
     for (const sessDir of sessionDirs) {
-      for (const c of parseSessionDir(sessDir)) {
+      const sessCalls = parseSessionDir(sessDir);
+      for (const c of sessCalls) {
         if (!c.timestamp || c.timestamp.slice(0, 10) < AIC_EFFECTIVE_DATE) continue;
         calls++;
-        nano += c.nanoAiu;
-        const day = c.timestamp.slice(0, 10);
-        byDay.set(day, (byDay.get(day) ?? 0) + c.nanoAiu);
-        const mk = c.model.toLowerCase();
-        byModel.set(mk, (byModel.get(mk) ?? 0) + c.nanoAiu);
+        add(c.timestamp.slice(0, 10), c.model.toLowerCase(), c.nanoAiu);
         if (c.timestamp > lastTs && c.nanoAiu > 0) {
           lastTs = c.timestamp;
           lastAiu = c.nanoAiu;
         }
       }
+      for (const [key, lostNano] of chatRecovery(sessDir, sessCalls)) {
+        const [day, model] = key.split("|");
+        add(day, model, lostNano);
+      }
     }
-    return { calls, nano, byDay, byModel, lastTs, lastAiu };
+    return { calls, nano, byDay, byModel, byDayModel, lastTs, lastAiu };
   }
 
   const truth0 = collectVSCodeTruth();
   const totalCallsSinceJune = truth0.calls;
   const truthByDay = truth0.byDay;
-  const truthByModel = truth0.byModel;
   const truthVSCodeCredits = truth0.nano / 1e9;
   const truthLastReqCredits = truth0.lastAiu / 1e9;
   const parseMs = Date.now() - t0;
@@ -196,13 +345,10 @@ function parseSessionDir(sessDir) {
   for (const session of agentScan.sessions) {
     const date = new Date(session.lastTs || session.firstTs).toISOString().slice(0, 10);
     if (date < AIC_EFFECTIVE_DATE) continue;
-    for (const [model, stats] of Object.entries(session.modelBreakdown)) {
-      const grossInput = stats.input + stats.cacheRead + stats.cacheWrite;
-      const usage = calculator.calculateCredits(model, grossInput, stats.output, stats.cacheRead, stats.cacheWrite);
-      if (session.source === "omp") truthOmpCredits += usage.totalCredits;
-      else truthPiCredits += usage.totalCredits;
-      const modelKey = usage.model.toLowerCase();
-      agentByModel.set(modelKey, (agentByModel.get(modelKey) ?? 0) + usage.totalCredits);
+    for (const row of agentBilledCredits(session, calculator)) {
+      if (session.source === "omp") truthOmpCredits += row.credits;
+      else truthPiCredits += row.credits;
+      agentByModel.set(row.model, (agentByModel.get(row.model) ?? 0) + row.credits);
     }
   }
   const agentMs = Date.now() - agentT0;
@@ -299,12 +445,9 @@ function parseSessionDir(sessDir) {
     [...truthByDay].filter(([day]) => inCycle(day)),
   );
   const truthByModelCycle = new Map();
-  for (const sessDir of sessionDirs) {
-    for (const call of parseSessionDir(sessDir)) {
-      if (!call.timestamp || !inCycle(call.timestamp.slice(0, 10))) continue;
-      const model = call.model.toLowerCase();
-      truthByModelCycle.set(model, (truthByModelCycle.get(model) ?? 0) + call.nanoAiu);
-    }
+  for (const [key, nano] of truth0.byDayModel) {
+    const [day, model] = key.split("|");
+    if (inCycle(day)) truthByModelCycle.set(model, (truthByModelCycle.get(model) ?? 0) + nano);
   }
 
   const agentByDay = new Map();
@@ -314,15 +457,12 @@ function parseSessionDir(sessDir) {
   for (const session of agentScan.sessions) {
     const date = new Date(session.lastTs || session.firstTs).toISOString().slice(0, 10);
     if (date < AIC_EFFECTIVE_DATE) continue;
-    for (const [model, stats] of Object.entries(session.modelBreakdown)) {
-      const grossInput = stats.input + stats.cacheRead + stats.cacheWrite;
-      const usage = calculator.calculateCredits(model, grossInput, stats.output, stats.cacheRead, stats.cacheWrite);
-      agentByDay.set(date, (agentByDay.get(date) ?? 0) + usage.totalCredits);
+    for (const row of agentBilledCredits(session, calculator)) {
+      agentByDay.set(date, (agentByDay.get(date) ?? 0) + row.credits);
       if (inCycle(date)) {
-        const modelKey = usage.model.toLowerCase();
-        agentByModelCycle.set(modelKey, (agentByModelCycle.get(modelKey) ?? 0) + usage.totalCredits);
-        if (session.source === "omp") truthOmpCreditsCycle += usage.totalCredits;
-        else truthPiCreditsCycle += usage.totalCredits;
+        agentByModelCycle.set(row.model, (agentByModelCycle.get(row.model) ?? 0) + row.credits);
+        if (session.source === "omp") truthOmpCreditsCycle += row.credits;
+        else truthPiCreditsCycle += row.credits;
       }
     }
   }
@@ -390,7 +530,8 @@ function parseSessionDir(sessDir) {
     dash.liveOtel.lastRequestAIC, truthLastReqCredits, 0.5, 0.01 + raceCredits);
 
   const todayKey = new Date().toISOString().slice(0, 10);
-  const truthToday = (truthByDay.get(todayKey) ?? 0) / 1e9 + (agentByDay.get(todayKey) ?? 0);
+  // liveOtel is the VS Code window only; OMP/Pi never feed it.
+  const truthToday = (truthByDay.get(todayKey) ?? 0) / 1e9;
   within(`liveOtel.sessionAIC ↔ today's truth (${todayKey})`,
     dash.liveOtel.sessionAIC, truthToday, 1.0, 0.5);
 

@@ -13,6 +13,7 @@ import { classifyByCatalog, getCachedCatalog } from "./modelCatalog";
 import { MachineView } from "./machineSync";
 import { computeCacheHit } from "./cache";
 import { QuotaSnapshot } from "./quotaSnapshot";
+import { dateUnattributed, DatedCredits, LedgerPoint, LocalEvent } from "./ledgerHistory";
 
 /**
  * AIC billing effective date. Only sessions/turns on or after this date
@@ -506,6 +507,13 @@ export interface AICDashboardData {
      * exclude it rather than render it as a real day's spend.
      */
     anchorDay?: string;
+    /**
+     * Part of `localDelta` placed on the days GitHub's ledger rose faster than
+     * the local logs did, from the polling history. Already included in
+     * `byDay` on those days; `localDelta` minus their sum is what is still
+     * parked on `anchorDay`.
+     */
+    datedByDay?: DatedCredits[];
     /** Whether overage spend is permitted on this seat. */
     overagePermitted: boolean;
     /** Server timestamp of the snapshot. */
@@ -769,7 +777,31 @@ function computeAllModels(turns: Turn[]): string[] {
 // authoritative debug-log `copilotUsageNanoAiu`, while not-yet-flushed live
 // OTel calls are added as temporary estimates.
 
-export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null, aicConfig?: AICConfig, agentScan?: AgentScanResult, activationTime?: string, cliScan?: CliScanResult, quotaSnapshot?: QuotaSnapshot | null, byokPricing?: Partial<ByokPricingConfig>): DashboardData {
+/**
+ * Every dated spend the local logs can vouch for with an exact credit figure:
+ * VS Code requests that carry GitHub's own `copilotUsageNanoAiu` (recovered
+ * ones are dated at the request that was lost) and OMP/Pi calls routed through
+ * Copilot. Rate-estimated rows are left out — they were never read from a bill.
+ */
+function ledgerLocalEvents(scan: ScanResult, agentScan?: AgentScanResult): LocalEvent[] {
+  const events: LocalEvent[] = [];
+  for (const turn of scan.turns) {
+    for (const req of turn.debugRequests ?? []) {
+      const t = Date.parse(req.timestamp);
+      if (req.nanoAiu > 0 && t > 0) {
+        events.push({ t, credits: req.nanoAiu / 1e9 });
+      }
+    }
+  }
+  for (const session of agentScan?.sessions ?? []) {
+    for (const call of session.callTimeline ?? []) {
+      events.push({ t: call.ts, credits: call.credits });
+    }
+  }
+  return events;
+}
+
+export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null, aicConfig?: AICConfig, agentScan?: AgentScanResult, activationTime?: string, cliScan?: CliScanResult, quotaSnapshot?: QuotaSnapshot | null, byokPricing?: Partial<ByokPricingConfig>, ledgerHistory?: readonly LedgerPoint[]): DashboardData {
   // Create AIC calculator early so it can be used in session views
   const config = aicConfig ?? DEFAULT_AIC_CONFIG;
   const calculator = createCalculatorFromConfig(config);
@@ -1430,6 +1462,8 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
     cachedTokens: number;
     date: string;
     actualCredits?: number;
+    /** Token mix for splitting `actualCredits` when the entry has no tokens of its own. */
+    splitTokens?: { prompt: number; output: number; cached: number };
     billable: boolean;
     sessionId?: string;
     source: "vscode" | "otel" | "omp" | "pi" | "cli";
@@ -1510,6 +1544,7 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
           cachedTokens: req.cached,
           date,
           actualCredits: hasNano ? req.nanoAiu / 1_000_000_000 : undefined,
+          splitTokens: req.splitTokens,
           billable,
           sessionId: t.sessionId,
           source: "vscode",
@@ -1881,18 +1916,33 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
 
   // Fold the unattributed remainder into `byDay` so every surface that sums
   // the day map (hero tile, Usage-by-Model total, sidebar, status bar) lands
-  // on the same reconciled number. Booking it on the most recent day with
-  // activity keeps the calendar's shape honest — we know the credits were
-  // spent, just not which local session produced them.
+  // on the same reconciled number. Where the ledger history shows WHEN it was
+  // billed, the credits go to those days; whatever it cannot place is booked on
+  // the most recent day with activity — we know the credits were spent, just
+  // not which local session produced them.
   const reconciledByDay = new Map(summary.byDay);
   let quotaAnchorDay = "";
-  if (quotaDelta !== 0) {
-    const cycleDays = [...reconciledByDay.keys()]
+  let datedUnattributed: DatedCredits[] = [];
+  let parkedDelta = quotaDelta;
+  if (quotaDelta > 0 && ledgerHistory && ledgerHistory.length > 1) {
+    datedUnattributed = dateUnattributed(ledgerHistory, ledgerLocalEvents(scan, agentScan), quotaDelta)
+      .filter(d => d.day >= summary.billingCycleStart && d.day <= summary.billingCycleEnd)
+      .map(d => ({ day: d.day, credits: Math.round(d.credits * 100) / 100 }));
+    for (const d of datedUnattributed) {
+      reconciledByDay.set(d.day, (reconciledByDay.get(d.day) ?? 0) + d.credits);
+      parkedDelta -= d.credits;
+    }
+    parkedDelta = Math.round(parkedDelta * 100) / 100;
+  }
+  // Rounding the dated slices to cents can overshoot the delta by a cent; that
+  // is not a remainder worth parking.
+  if (Math.abs(parkedDelta) > (datedUnattributed.length > 0 ? 0.05 : 0.004)) {
+    const cycleDays = [...summary.byDay.keys()]
       .filter(d => d >= summary.billingCycleStart && d <= summary.billingCycleEnd)
       .sort();
     quotaAnchorDay = cycleDays[cycleDays.length - 1]
       ?? new Date().toISOString().slice(0, 10);
-    reconciledByDay.set(quotaAnchorDay, Math.max(0, (reconciledByDay.get(quotaAnchorDay) ?? 0) + quotaDelta));
+    reconciledByDay.set(quotaAnchorDay, Math.max(0, (reconciledByDay.get(quotaAnchorDay) ?? 0) + parkedDelta));
   }
 
   // Pace and projection must derive from the reconciled total too, or the
@@ -2005,6 +2055,7 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
           localDelta: quotaDelta,
           localTotal: localTotalCr,
           anchorDay: quotaAnchorDay || undefined,
+          datedByDay: datedUnattributed.length > 0 ? datedUnattributed : undefined,
           overagePermitted: quotaSnapshot.overagePermitted,
           timestampUtc: quotaSnapshot.timestampUtc,
         }

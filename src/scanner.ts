@@ -155,6 +155,12 @@ export interface DebugRequest {
    * only per-request evidence that a BYOK provider served the call.
    */
   debugName?: string;
+  /**
+   * Token mix used only to apportion `nanoAiu` across the Input / Output /
+   * Cached columns when the request has no token counts of its own (a request
+   * recovered from the chatSession). Never summed into token totals.
+   */
+  splitTokens?: { prompt: number; output: number; cached: number };
 }
 
 export interface ToolCall {
@@ -1847,6 +1853,8 @@ export interface RecoveredCredit {
   turnIndex: number;
   startMs: number;
   model: string;
+  /** Token mix of the same model's surviving requests in this session. */
+  splitTokens?: { prompt: number; output: number; cached: number };
   credits: number;
 }
 
@@ -1946,6 +1954,19 @@ export function recoverTruncatedDebugCredits(
   }
 
   const scale = Math.min(weightTotal, shortfall) / weightTotal;
+  // The lost requests' own tokens are gone, but the same model's surviving
+  // requests in the session show how its credits split across columns.
+  const mixByModel = new Map<string, { prompt: number; output: number; cached: number }>();
+  for (const req of debugRequests) {
+    if (req.nanoAiu <= 0) {
+      continue;
+    }
+    const mix = mixByModel.get(req.model) ?? { prompt: 0, output: 0, cached: 0 };
+    mix.prompt += req.prompt;
+    mix.output += req.output;
+    mix.cached += req.cached;
+    mixByModel.set(req.model, mix);
+  }
   const out: RecoveredCredit[] = [];
   for (let i = 0; i < eligible.length; i++) {
     if (weights[i] > 0) {
@@ -1954,6 +1975,7 @@ export function recoverTruncatedDebugCredits(
         startMs: starts[i],
         model: eligible[i].modelFamily,
         credits: weights[i] * scale,
+        splitTokens: mixByModel.get(eligible[i].modelFamily),
       });
     }
   }
@@ -1974,6 +1996,7 @@ function applyRecoveredCredit(t: Turn, r: RecoveredCredit): void {
       cached: 0,
       nanoAiu,
       debugName: RECOVERED_DEBUG_NAME,
+      splitTokens: r.splitTokens,
     },
   ];
   const byModel: Record<string, DebugModelTotals> = { ...(t.debugByModel ?? {}) };

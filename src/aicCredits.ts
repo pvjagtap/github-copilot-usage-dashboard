@@ -607,6 +607,12 @@ export class AICCalculator {
       /** If set, use this as the actual credits instead of computing from rates */
       actualCredits?: number;
       /**
+       * Token mix used ONLY to split `actualCredits` across the Input / Output /
+       * Cached columns when the entry carries no tokens of its own. The entry's
+       * own token counts (and so every token total) are left untouched.
+       */
+      splitTokens?: { prompt: number; output: number; cached: number };
+      /**
        * Caller-supplied billable override. When undefined, the calculator
        * decides via `actualCredits > 0` OR `isKnownGHCModel(model)`.
        */
@@ -665,8 +671,13 @@ export class AICCalculator {
         // Output=0 / Cached=0 for every model whose debug logs carried
         // `copilotUsageNanoAiu` (i.e. essentially every post-June-1 turn).
         const rate = this.findModelRate(entry.model);
+        const basis = entry.splitTokens ?? {
+          prompt: entry.inputTokens,
+          output: entry.outputTokens,
+          cached: entry.cachedTokens,
+        };
         const estimate = rate
-          ? this._compute(rate, entry.inputTokens, entry.outputTokens, entry.cachedTokens, 0)
+          ? this._compute(rate, basis.prompt, basis.output, basis.cached, 0)
           : null;
         const estTotal = estimate
           ? estimate.inputCredits + estimate.outputCredits + estimate.cachedCredits

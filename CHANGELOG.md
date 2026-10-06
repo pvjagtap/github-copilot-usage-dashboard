@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.11] - 2026-10-06
+
+### Fixed
+
+- **Credits GitHub billed in a burst are now dated to that burst.** The ledger
+  reports one cycle total, so the part no local log explains was always parked
+  on the last day with local activity. The extension now remembers each ledger
+  reading it polls (`globalState`, ~a few hundred small records per cycle) and
+  lines every rise up with the local activity inside the same window. Only new
+  highs of `ledger rise − local spend` are dated, so billing lag is never
+  mistaken for hidden spend; a rise inside a polling gap over 3 hours, and any
+  day under 25 credits, stay parked. The dated slice can never exceed the
+  unattributed total. The calendar stripes those days and says which part was
+  dated and which is still parked. New `tests/verify-ledger-history.js`.
+- **Recovered credits were all listed under Input.** Credits recovered from a
+  head-truncated debug log have no tokens, so the "AI Credits by Model" table
+  put every one in the Input column. They now split like the same model's
+  surviving requests; totals and token counts are unchanged.
+- **OMP subagent transcripts were never scanned.** OMP keeps each subagent's
+  usage in `<project>/<sessionId>/<Agent>.jsonl`, absent from the parent file;
+  only `<project>/*.jsonl` was read. Their calls and credits (Copilot-routed
+  ones billed, BYOK ones informational) are now included. They count as usage,
+  not as sessions.
+- **"N sessions" counted chats that were never used.** A chat with no turns and
+  no credits inflated the session tiles and dragged turns/session down. Only
+  sessions with usage are counted; the Sessions table still lists every chat.
+- **Usage by Source mixed time windows.** Within the OMP, Pi and CLI columns,
+  sessions, calls and credits covered the billing cycle while tokens were all
+  time. Every row is now the cycle, and the headers say so.
+- **Daily-credits calendar mixed UTC and local days.** Credits are bucketed by
+  UTC day (GitHub's billing day) but the "today" marker and future shading used
+  the local date, so west of UTC an evening's usage appeared on a cell that
+  looked like tomorrow. Both are UTC now, the heading says "(UTC days)", and
+  each day's tooltip shows the span of your own clock it covers.
+
+### Changed
+
+- Tests brought back in line with current behaviour: `verify-dashboard-vs-api`
+  re-derives head-truncation recovery independently, prices OMP/Pi at what
+  GitHub bills (Copilot-routed, recorded cost, cycle-scoped) and loads the BYOK
+  catalog like the extension does; `verify-quota-reconciliation` and
+  `verify-no-drift` follow the live billing cycle instead of a hard-coded month.
+  New `tests/verify-agent-subagent-sessions.js`.
+
 ## [1.11.10] - 2026-10-06
 
 ### Fixed

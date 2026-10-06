@@ -92,8 +92,11 @@ check("survives a garbage payload", () => {
 });
 
 // ─── buildDashboardData reconciliation ────────────────────────
-const DAY = "2026-09-03";
-const CYCLE_ANCHOR = new Date("2026-09-04T12:00:00Z");
+// The cycle window follows the clock, so a hard-coded month stops being "inside
+// the cycle" the day after it ends and the fixture's credits get dropped.
+const NOW = new Date();
+const DAY = new Date(Date.UTC(NOW.getUTCFullYear(), NOW.getUTCMonth(), 1)).toISOString().slice(0, 10);
+const CYCLE_ANCHOR = NOW;
 
 function scanWithCredits(credits) {
   return {

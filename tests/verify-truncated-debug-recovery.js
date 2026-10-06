@@ -58,6 +58,9 @@ console.log("\nhead cut: request 0 lost entirely");
   const rec = recoverTruncatedDebugCredits(turns, dbg, 140);
   assert("exactly the lost request is recovered", rec.length === 1 && rec[0].turnIndex === 0 && near(rec[0].credits, 100),
     JSON.stringify(rec));
+  assert("carries the surviving requests' token mix for the column split",
+    JSON.stringify(rec[0].splitTokens) === JSON.stringify({ prompt: 30, output: 30, cached: 0 }),
+    JSON.stringify(rec[0].splitTokens));
 }
 
 console.log("\nhead cut: request 1 only partly lost");
@@ -104,6 +107,30 @@ console.log("\nturn with no debug overlay already counts its own credits");
   const turns = [chatTurn(0, 0, 100, false), chatTurn(1, 10, 80)];
   const dbg = [dbgReq(11, 80)];
   assert("not recovered a second time", recoverTruncatedDebugCredits(turns, dbg, 80).length === 0);
+}
+
+// ── Column split of recovered credits ───────────────────────────
+
+console.log("\nrecovered credits split across Input / Output / Cached like their model");
+{
+  const { createCalculatorFromConfig, DEFAULT_AIC_CONFIG } = require(path.join(OUT, "aicCredits.js"));
+  const calc = createCalculatorFromConfig(DEFAULT_AIC_CONFIG);
+  const day = calc.computeSummary([]).billingCycleStart; // inside the live cycle
+  const mix = { prompt: 1_000_000, output: 20_000, cached: 900_000 };
+  const real = { model: "claude-opus-5", inputTokens: mix.prompt, outputTokens: mix.output, cachedTokens: mix.cached,
+    date: day, actualCredits: 100, billable: true };
+  const recovered = { model: "claude-opus-5", inputTokens: 0, outputTokens: 0, cachedTokens: 0,
+    date: day, actualCredits: 100, billable: true, splitTokens: mix };
+  const row = s => [...s.byModel.values()].find(m => m.model === "claude-opus-5");
+  const a = row(calc.computeSummary([real]));
+  const b = row(calc.computeSummary([real, recovered]));
+  assert("total is the sum of both entries", near(b.totalCredits, 200), String(b.totalCredits));
+  assert("recovered half splits like the real half",
+    near(b.inputCredits, 2 * a.inputCredits) && near(b.outputCredits, 2 * a.outputCredits) && near(b.cachedCredits, 2 * a.cachedCredits),
+    `${b.inputCredits}/${b.outputCredits}/${b.cachedCredits} vs ${a.inputCredits}/${a.outputCredits}/${a.cachedCredits}`);
+  assert("the split mix is not counted as tokens",
+    b.inputTokens === mix.prompt && b.outputTokens === mix.output && b.cachedTokens === mix.cached,
+    `${b.inputTokens}/${b.outputTokens}/${b.cachedTokens}`);
 }
 
 // ── Full scan: kind=0 chatSession + head-truncated debug log ────

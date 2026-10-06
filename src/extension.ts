@@ -20,6 +20,7 @@ import { Enforcement } from "./enforcement";
 import { HookManager } from "./hookManager";
 import { detectAndApplyPlan, resetPlanDetection } from "./planDetector";
 import { fetchQuotaSnapshot, getCachedQuotaSnapshot } from "./quotaSnapshot";
+import { LEDGER_HISTORY_KEY, LedgerPoint, recordLedgerPoint } from "./ledgerHistory";
 import { loadCatalog as loadModelCatalog } from "./modelCatalog";
 import { registerSyncKeys, publishAndRead, combinedCredits } from "./machineSync";
 import { computeCacheHit } from "./cache";
@@ -135,7 +136,8 @@ function buildData(): DashboardData {
   const byokPricing = vscode.workspace
     .getConfiguration("copilotUsage")
     .get<Record<string, unknown>>("byokPricing");
-  cachedDashData = buildDashboardData(scan, otelStats, aicConfig, lastAgentScan, activationTime, lastCliScan, getCachedQuotaSnapshot(), byokPricing);
+  const ledgerHistory = extCtx?.globalState.get<LedgerPoint[]>(LEDGER_HISTORY_KEY);
+  cachedDashData = buildDashboardData(scan, otelStats, aicConfig, lastAgentScan, activationTime, lastCliScan, getCachedQuotaSnapshot(), byokPricing, ledgerHistory);
 
   // Publish this machine's rollup and fold in whatever other systems have
   // synced. Rollups only — never raw sessions, prompts or log contents.
@@ -308,6 +310,13 @@ async function runScan(): Promise<void> {
     // GitHub's own credit ledger. Local logs are only ever a lower bound, so
     // this is what keeps the headline from drifting below github.com.
     await fetchQuotaSnapshot(msg => output.appendLine(msg));
+    // Remember when the ledger moved, so credits no local log explains can be
+    // dated to the window in which GitHub billed them.
+    const ledger = getCachedQuotaSnapshot();
+    if (ledger && extCtx) {
+      const prior = extCtx.globalState.get<LedgerPoint[]>(LEDGER_HISTORY_KEY) ?? [];
+      void extCtx.globalState.update(LEDGER_HISTORY_KEY, recordLedgerPoint(prior, ledger.creditsUsed, ledger.fetchedAt));
+    }
     cachedDashData = undefined; // Invalidate cache
     // Data-only refresh of the cache countdown anchors — no extra file I/O.
     ttlTracker?.ingest(lastScan, lastCliScan);
