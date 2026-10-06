@@ -10,23 +10,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Credits missing from long VS Code sessions.** Copilot caps each
-  `debug-logs/<sid>/main.jsonl` by cutting off its head (the file opens on a
-  half-written line), so the `llm_request` lines — and the
-  `copilotUsageNanoAiu` GitHub billed — of a long session's early requests are
-  gone. The scanner then overwrote each turn's credits with the debug-log
-  figure, so those requests were billed but never shown. The chatSession file
-  keeps VS Code's own per-request `copilotCredits`, which equals the debug-log
-  sum to the cent for intact sessions (19 of 21 October sessions checked). The
-  scanner now recovers the shortfall from it, dated and modelled at the lost
-  request. Recovery is capped by the session's total shortfall and only covers
-  requests that began before the log's first surviving `llm_request`, so a log
-  that merely lags the live tail is never topped up. Two October sessions
-  accounted for 3,192.5 credits (about half the gap to GitHub's ledger) and two
-  September sessions for 6,544. New `tests/verify-truncated-debug-recovery.js`.
+  `debug-logs/<sid>/main.jsonl` by cutting off its head (the file then opens on
+  a half-written line), so the `llm_request` lines of a long session's early
+  requests — and the `copilotUsageNanoAiu` GitHub billed for them — are gone.
+  The scanner overwrote each turn's credits with the debug-log figure, so
+  those requests were billed but never shown, and the dashboard fell short of
+  GitHub's ledger by whole sessions' worth of credits.
+
+  The chatSession file keeps VS Code's own per-request `copilotCredits`, which
+  matched the debug-log sum to the cent for every intact session checked. The
+  scanner now takes the shortfall back from it, dated and attributed at the
+  request that was lost:
+  - It never recovers more than the session's total shortfall, so a
+    misattributed request can move credit between days but never add any.
+  - Only requests that began before the log's first surviving `llm_request`
+    qualify, so a log that merely lags the live tail is not topped up.
+  - A turn the debug log never overlaid keeps its own credits and is not
+    recovered a second time.
+
+  Recovered credits carry no token counts (none survive), so the "AI Credits by
+  Model" table lists them under Input; totals and per-day figures are exact.
+  Applies to every cycle, including closed ones. New
+  `tests/verify-truncated-debug-recovery.js`.
 - **Empty-window sessions' debug logs were never read.** Sessions opened with
   no folder keep their debug logs under `globalStorage/github.copilot-chat/
   debug-logs`; only per-workspace folders were scanned, so their exact
-  `copilotUsageNanoAiu` was lost.
+  `copilotUsageNanoAiu` was lost. That directory is now scanned too.
+
+### Changed
+
+- The 1.11.9 fixes (below) were not committed on their own and ship with this
+  release.
+- `.agents/AGENTS.md` records the head-truncation invariant so the debug-log
+  overlay is never again allowed to overwrite `debugAicCredits` unreconciled.
 
 ## [1.11.9] - 2026-10-06
 
