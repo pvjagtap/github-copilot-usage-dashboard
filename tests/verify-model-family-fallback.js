@@ -105,7 +105,11 @@ ok(
 
 console.log("\n== Test 5: family rates price real traffic, not gpt-4.1 defaults ==");
 const usage = calc.calculateCredits("claude-opus-6", 1_000_000, 100_000, 0);
-ok("claude-opus-6 input priced at 400/1M (newest Opus rate, not the 200/1M unknown default)", usage.inputCredits === 400, `${usage.inputCredits}`);
+// The rate table's INPUT rate is what family fallback must inherit; the credits
+// for uncached Anthropic prompt tokens use the cache-write rate (500 for Opus 5.5).
+ok("claude-opus-6 input rate is 400/1M (newest Opus rate, not the 200/1M unknown default)",
+  calc.findModelRate("claude-opus-6").inputCreditsPerMillion === 400, `${calc.findModelRate("claude-opus-6").inputCreditsPerMillion}`);
+ok("claude-opus-6 uncached prompt is billed as a cache write (500/1M)", usage.inputCredits === 500, `${usage.inputCredits}`);
 ok("claude-opus-6 output priced at 2000/1M (not the 800/1M unknown default)", usage.outputCredits === 200, `${usage.outputCredits}`);
 ok("claude-opus-6 carries the premium tier", usage.tier === "premium", usage.tier);
 

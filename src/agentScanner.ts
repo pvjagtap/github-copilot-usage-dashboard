@@ -24,7 +24,7 @@ import { isObj, mapConcurrent } from "./util";
 
 // ─── Public Types ──────────────────────────────────────────────
 
-export type AgentSource = "omp" | "pi";
+export type AgentSource = "omp" | "pi" | "pig";
 
 /**
  * Per-model token counts within a session.
@@ -109,6 +109,7 @@ export interface AgentScanResult {
   totalPremiumRequests: number;
   ompSessionCount: number;
   piSessionCount: number;
+  pigSessionCount: number;
   /** All-time (unfiltered by billing period) per-source totals — for historical token display */
   ompAllTimeSessions: number;
   ompAllTimeLlmCalls: number;
@@ -116,6 +117,9 @@ export interface AgentScanResult {
   piAllTimeSessions: number;
   piAllTimeLlmCalls: number;
   piAllTimeTokens: number;
+  pigAllTimeSessions: number;
+  pigAllTimeLlmCalls: number;
+  pigAllTimeTokens: number;
   scanMs: number;
 }
 
@@ -127,6 +131,19 @@ export function getOmpSessionsRoot(): string {
 
 export function getPiSessionsRoot(): string {
   const agentDir = process.env["PI_CODING_AGENT_DIR"] || path.join(os.homedir(), ".pi", "agent");
+  return path.join(agentDir, "sessions");
+}
+
+/**
+ * PiG (a Pi-derived agent) keeps its own state under `~/.pig`. In default mode
+ * `PIG_CODING_AGENT_DIR` moves the agent directory alone and `PIG_HOME` moves
+ * everything; its `sessionDir` setting can relocate sessions further, which is
+ * not followed here.
+ */
+export function getPigSessionsRoot(): string {
+  const agentDir =
+    process.env["PIG_CODING_AGENT_DIR"] ||
+    path.join(process.env["PIG_HOME"] || path.join(os.homedir(), ".pig"), "agent");
   return path.join(agentDir, "sessions");
 }
 
@@ -350,6 +367,30 @@ function parseAgentSession(
   };
 }
 
+/**
+ * Every `.jsonl` below `dir`, to a bounded depth. `subagent-artifacts` holds
+ * copies of transcripts that already exist as real sessions elsewhere in the
+ * tree (and carry no session header), so it is not descended into.
+ */
+async function collectNestedJsonl(dir: string, depth: number): Promise<string[]> {
+  if (depth <= 0) {
+    return [];
+  }
+  const out: string[] = [];
+  const entries = await fsp.readdir(dir, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name !== "subagent-artifacts") {
+        out.push(...(await collectNestedJsonl(full, depth - 1)));
+      }
+    } else if (entry.name.endsWith(".jsonl")) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
 // ─── Directory Scanner ────────────────────────────────────────
 
 async function scanDirectory(
@@ -402,21 +443,21 @@ async function scanDirectory(
       readSession(path.join(projPath, file))
     );
 
-    // OMP also keeps every subagent's transcript in a directory named after the
-    // parent session. Those calls are billed separately and appear nowhere in
-    // the parent file, so skipping the directory dropped their usage entirely.
-    const subagentDirs = files.filter(f => !f.endsWith(".jsonl"));
-    const subagentSessions = await mapConcurrent(subagentDirs, 8, async dir => {
-      const dirPath = path.join(projPath, dir);
-      const dirStat = await fsp.stat(dirPath).catch(() => null);
-      if (!dirStat?.isDirectory()) {
-        return [];
-      }
-      const names = (await readdirSafe(dirPath)).filter(n => n.endsWith(".jsonl"));
-      return mapConcurrent(names, 8, name => readSession(path.join(dirPath, name)));
+    // Agents also keep every subagent's transcript in directories nested under
+    // the parent session (OMP: `<session>/<Agent>.jsonl`; PiG:
+    // `<session>/<run>/run-0/session.jsonl`). Those calls are billed separately
+    // and appear nowhere in the parent file, so skipping the directories
+    // dropped their usage entirely. Each is a usage record, never a session the
+    // user opened, so it is tagged as a child of the project's session.
+    const nested = (await Promise.all(
+      files.filter(f => !f.endsWith(".jsonl")).map(dir => collectNestedJsonl(path.join(projPath, dir), 4)),
+    )).flat();
+    const subagentSessions = await mapConcurrent(nested, 8, async file => {
+      const s = await readSession(file);
+      return s && !s.parentSession ? { ...s, parentSession: projPath } : s;
     });
 
-    return [...sessions, ...subagentSessions.flat()].filter((s): s is AgentSessionData => s !== null);
+    return [...sessions, ...subagentSessions].filter((s): s is AgentSessionData => s !== null);
   });
 
   const rootSessions = await mapConcurrent(rootFiles, 8, file =>
@@ -437,7 +478,7 @@ async function scanDirectory(
 // ─── Public API ───────────────────────────────────────────────
 
 /**
- * Scan OMP and Pi agent session JSONL files.
+ * Scan OMP, Pi and PiG agent session JSONL files.
  * Returns sessions within the current billing period (1st of current month UTC).
  * Results are mtime-cached; unchanged files are not re-parsed.
  */
@@ -446,9 +487,10 @@ export async function scanAgentSessions(): Promise<AgentScanResult> {
   const now = new Date();
   const billingStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
 
-  const [ompRaw, piRaw] = await Promise.all([
+  const [ompRaw, piRaw, pigRaw] = await Promise.all([
     scanDirectory(getOmpSessionsRoot(), "omp"),
     scanDirectory(getPiSessionsRoot(), "pi"),
+    scanDirectory(getPigSessionsRoot(), "pig"),
   ]);
 
   // All-time per-source totals (before billing filter) — for historical token display
@@ -458,6 +500,9 @@ export async function scanAgentSessions(): Promise<AgentScanResult> {
   let piAllTimeSessions = 0,
     piAllTimeLlmCalls = 0,
     piAllTimeTokens = 0;
+  let pigAllTimeSessions = 0,
+    pigAllTimeLlmCalls = 0,
+    pigAllTimeTokens = 0;
   for (const s of ompRaw) {
     if (!s.parentSession) {
       ompAllTimeSessions++;
@@ -472,9 +517,16 @@ export async function scanAgentSessions(): Promise<AgentScanResult> {
     piAllTimeLlmCalls += s.llmCalls;
     piAllTimeTokens += s.totalTokens;
   }
+  for (const s of pigRaw) {
+    if (!s.parentSession) {
+      pigAllTimeSessions++;
+    }
+    pigAllTimeLlmCalls += s.llmCalls;
+    pigAllTimeTokens += s.totalTokens;
+  }
 
   // Billing-period sessions (for AIC credit computation)
-  const allRaw = [...ompRaw, ...piRaw];
+  const allRaw = [...ompRaw, ...piRaw, ...pigRaw];
   const billable = allRaw.filter(s => (s.lastTs || s.firstTs) >= billingStart);
   billable.sort((a, b) => b.lastTs - a.lastTs);
 
@@ -488,7 +540,7 @@ export async function scanAgentSessions(): Promise<AgentScanResult> {
   // Evict stale cache entries for files that no longer exist on disk.
   // fileCache only holds successfully parsed sessions, so any key absent from
   // the current scan corresponds to a deleted (or moved) file.
-  const seenPaths = new Set<string>([...ompRaw, ...piRaw].map(s => s.filePath));
+  const seenPaths = new Set<string>(allRaw.map(s => s.filePath));
   for (const key of fileCache.keys()) {
     if (!seenPaths.has(key)) {
       fileCache.delete(key);
@@ -507,12 +559,16 @@ export async function scanAgentSessions(): Promise<AgentScanResult> {
     totalPremiumRequests: totalPremium,
     ompSessionCount: billable.filter(s => s.source === "omp" && !s.parentSession).length,
     piSessionCount: billable.filter(s => s.source === "pi" && !s.parentSession).length,
+    pigSessionCount: billable.filter(s => s.source === "pig" && !s.parentSession).length,
     ompAllTimeSessions,
     ompAllTimeLlmCalls,
     ompAllTimeTokens,
     piAllTimeSessions,
     piAllTimeLlmCalls,
     piAllTimeTokens,
+    pigAllTimeSessions,
+    pigAllTimeLlmCalls,
+    pigAllTimeTokens,
     scanMs: Date.now() - t0,
   };
 }

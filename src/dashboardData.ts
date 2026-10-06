@@ -346,6 +346,14 @@ export interface AgentUsageSummary {
   piAllTimeLlmCalls: number;
   piAllTimeTokens: number;
 
+  // ── PiG coding agent (~/.pig/agent/sessions) ────────────────
+  pigSessions: number;
+  pigLlmCalls: number;
+  pigTotalTokens: number;
+  pigTotalCredits: number;
+  pigAllTimeLlmCalls: number;
+  pigAllTimeTokens: number;
+
   // ── GitHub Copilot CLI (~/.copilot/session-state) ──────────
   // Live-walked prompts × multiplier; overridden by session.shutdown
   // totalNanoAiu whenever a clean shutdown was emitted. See
@@ -1466,7 +1474,7 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
     splitTokens?: { prompt: number; output: number; cached: number };
     billable: boolean;
     sessionId?: string;
-    source: "vscode" | "otel" | "omp" | "pi" | "cli";
+    source: "vscode" | "otel" | "omp" | "pi" | "pig" | "cli";
   }> = [];
   const classify = (
     model: string,
@@ -1648,6 +1656,9 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
   let piTokens = 0;
   let ompCalls = 0;
   let piCalls = 0;
+  let pigCredits = 0;
+  let pigTokens = 0;
+  let pigCalls = 0;
   if (agentScan) {
     for (const session of agentScan.sessions) {
       const date = new Date(session.lastTs || session.firstTs).toISOString().slice(0, 10);
@@ -1657,6 +1668,9 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
       if (session.source === "omp") {
         ompTokens += session.totalTokens;
         ompCalls  += session.llmCalls;
+      } else if (session.source === "pig") {
+        pigTokens += session.totalTokens;
+        pigCalls  += session.llmCalls;
       } else {
         piTokens += session.totalTokens;
         piCalls  += session.llmCalls;
@@ -1726,10 +1740,11 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
           date,
           actualCredits,
           billable,
-          source: session.source === "omp" ? "omp" : "pi",
+          source: session.source,
         });
         if (billable) {
           if (session.source === "omp") { ompCredits += actualCredits; }
+          else if (session.source === "pig") { pigCredits += actualCredits; }
           else { piCredits += actualCredits; }
         }
       }
@@ -2074,7 +2089,7 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
     vscodeTotalTokens: vscodeTurnTokens,
     // Residual AIC after subtracting every non-VSCode source so the four
     // columns in the dashboard reconcile to summary.totalCredits exactly.
-    vscodeAicCredits:  Math.round((summary.totalCredits - ompCredits - piCredits - cliCredits) * 100) / 100,
+    vscodeAicCredits:  Math.round((summary.totalCredits - ompCredits - piCredits - pigCredits - cliCredits) * 100) / 100,
 
     ompSessions:    agentScan?.ompSessionCount ?? 0,
     ompLlmCalls:    ompCalls,
@@ -2089,6 +2104,13 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
     piTotalCredits:    Math.round(piCredits  * 100) / 100,
     piAllTimeLlmCalls: agentScan?.piAllTimeLlmCalls  ?? 0,
     piAllTimeTokens:   agentScan?.piAllTimeTokens    ?? 0,
+
+    pigSessions:       agentScan?.pigSessionCount ?? 0,
+    pigLlmCalls:       pigCalls,
+    pigTotalTokens:    pigTokens,
+    pigTotalCredits:   Math.round(pigCredits * 100) / 100,
+    pigAllTimeLlmCalls: agentScan?.pigAllTimeLlmCalls ?? 0,
+    pigAllTimeTokens:  agentScan?.pigAllTimeTokens   ?? 0,
 
     cliSessions:        cliScan?.sessions.length ?? 0,
     cliLlmCalls:        cliCalls,
@@ -2106,6 +2128,7 @@ export function buildDashboardData(scan: ScanResult, liveStats: LiveStats | null
       scan.sessions.length
       + (agentScan?.ompSessionCount ?? 0)
       + (agentScan?.piSessionCount ?? 0)
+      + (agentScan?.pigSessionCount ?? 0)
       + (cliScan?.sessions.length ?? 0),
     totalCredits:  Math.round(summary.totalCredits * 100) / 100,
     scanMs:        (agentScan?.scanMs ?? 0) + (cliScan?.scanMs ?? 0),

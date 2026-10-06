@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.13] - 2026-10-06
+
+### Fixed
+
+- **PiG (`~/.pig`) sessions were never scanned.** PiG is a Pi-derived agent that
+  routes to GitHub Copilot. Its usage matched no local log, so GitHub's ledger
+  simply showed credits this machine could not explain. On one machine that was
+  a single two-hour window of 2,940 credits (the gap against the ledger fell
+  from 3,130 to 151, 0.4%). PiG is now a first-class source with its own column,
+  using the same recorded `usage.cost` ledger as Pi. Subagent runs
+  (`<session>/<run>/run-0/session.jsonl`) are included as usage, not sessions;
+  the header-less copies under `subagent-artifacts` are not counted twice. The
+  directory follows `PIG_CODING_AGENT_DIR` / `PIG_HOME`; a custom `sessionDir`
+  in PiG's settings is not followed. New `tests/verify-pig-sessions.js`.
+- **Estimated Anthropic credits ran 4-11% low.** Fitted against 4,263 requests
+  GitHub actually billed (Opus 5, Opus 5.5, Sonnet 5, Haiku 4.5): every prompt
+  token not read from cache is billed at the cache-WRITE rate, exactly (R² =
+  1.0000), where the estimator used the plain input rate whenever no cache-write
+  count was available (debug logs and OTel report only prompt and cached-read
+  totals). Affects estimated rows only — live pending requests and the column
+  split — never credits read from `copilotUsageNanoAiu`. The uncached share
+  still shows in the Input column.
+
 ## [1.11.12] - 2026-10-06
 
 ### Fixed

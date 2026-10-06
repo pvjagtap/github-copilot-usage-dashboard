@@ -119,9 +119,12 @@ const liveStats = {
 
 const dash = buildDashboardData(scan, liveStats, DEFAULT_AIC_CONFIG, undefined, activationTime);
 
-assert.strictEqual(dash.liveOtel.sessionAIC, 103.2);
-assert.strictEqual(dash.liveOtel.lastRequestAIC, 81.8);
-assert.strictEqual(dash.aicSummary.totalCredits, 103.2);
+// The pending request has no debug-log credit yet, so it is estimated: 163,600
+// uncached Opus tokens. Anthropic bills uncached input as a cache write
+// (625/1M), so 102.25, not the 81.8 the plain input rate gave.
+assert.strictEqual(dash.liveOtel.sessionAIC, 123.65);
+assert.strictEqual(dash.liveOtel.lastRequestAIC, 102.25);
+assert.strictEqual(dash.aicSummary.totalCredits, 123.65);
 
 const laterDebugRequest = {
   timestamp: `${today}T10:02:05.000Z`,
@@ -237,10 +240,11 @@ const watermarkDash = buildDashboardData(watermarkRegressionScan, watermarkRegre
 
 // Count-based matching: 2 debug requests, 3 OTel requests (all claude-opus family)
 // → 1 pending = newest OTel (r-later at 10:02:00, 11580 tokens)
-// sessionAIC = debug(21.4 + 5.79) + estimate(11580 opus) = 27.19 + 5.79 = 32.98
-assert.strictEqual(watermarkDash.liveOtel.sessionAIC, 32.98);
-assert.strictEqual(watermarkDash.liveOtel.lastRequestAIC, 5.79);
-assert.strictEqual(watermarkDash.aicSummary.totalCredits, 32.98);
+// sessionAIC = debug(21.4 + 5.79) + estimate(11580 uncached opus at the 625/1M
+// cache-write rate = 7.2375) = 27.19 + 7.2375 = 34.4275 -> 34.43
+assert.strictEqual(watermarkDash.liveOtel.sessionAIC, 34.43);
+assert.strictEqual(watermarkDash.liveOtel.lastRequestAIC, 5.79); // newest request with an exact figure
+assert.strictEqual(watermarkDash.aicSummary.totalCredits, 34.43);
 
 console.log("PASS live AIC reconciliation: debug truth + pending OTel request =", dash.liveOtel.sessionAIC);
 console.log("PASS count-based matching: 2 debug + 1 pending =", watermarkDash.liveOtel.sessionAIC);

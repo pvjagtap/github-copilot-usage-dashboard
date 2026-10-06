@@ -330,7 +330,7 @@ async function runScan(): Promise<void> {
       `Scan: ${lastScan.stats.canonicalSessions} sessions, ${lastScan.stats.turnsStored} turns, ` +
         `${lastScan.stats.toolCallsStored} tools (${elapsed}ms)` +
         (lastAgentScan
-          ? ` | Agent: OMP=${lastAgentScan.ompSessionCount} Pi=${lastAgentScan.piSessionCount} (${lastAgentScan.scanMs}ms)`
+          ? ` | Agent: OMP=${lastAgentScan.ompSessionCount} Pi=${lastAgentScan.piSessionCount} PiG=${lastAgentScan.pigSessionCount} (${lastAgentScan.scanMs}ms)`
           : " | Agent: scan failed") +
         (lastCliScan
           ? ` | CLI: ${lastCliScan.sessions.length}/${lastCliScan.allTimeSessions} sessions, ` +

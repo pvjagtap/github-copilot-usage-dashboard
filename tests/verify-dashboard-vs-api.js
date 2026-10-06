@@ -342,11 +342,13 @@ function agentBilledCredits(session, calculator) {
   const agentByModel = new Map();
   let truthOmpCredits = 0;
   let truthPiCredits = 0;
+  let truthPigCredits = 0;
   for (const session of agentScan.sessions) {
     const date = new Date(session.lastTs || session.firstTs).toISOString().slice(0, 10);
     if (date < AIC_EFFECTIVE_DATE) continue;
     for (const row of agentBilledCredits(session, calculator)) {
       if (session.source === "omp") truthOmpCredits += row.credits;
+      else if (session.source === "pig") truthPigCredits += row.credits;
       else truthPiCredits += row.credits;
       agentByModel.set(row.model, (agentByModel.get(row.model) ?? 0) + row.credits);
     }
@@ -359,7 +361,7 @@ function agentBilledCredits(session, calculator) {
     `Pi  truth:  ${agentScan.piSessionCount} sessions, ${truthPiCredits.toFixed(2)} credits`
   );
 
-  const truthTotalCredits = truthVSCodeCredits + truthOmpCredits + truthPiCredits;
+  const truthTotalCredits = truthVSCodeCredits + truthOmpCredits + truthPiCredits + truthPigCredits;
   console.log(`TOTAL truth: ${truthTotalCredits.toFixed(2)} credits`);
 
   // ── Dashboard's view — run the real pipeline (with agentScan!) ──
@@ -454,6 +456,7 @@ function agentBilledCredits(session, calculator) {
   const agentByModelCycle = new Map();
   let truthOmpCreditsCycle = 0;
   let truthPiCreditsCycle = 0;
+  let truthPigCreditsCycle = 0;
   for (const session of agentScan.sessions) {
     const date = new Date(session.lastTs || session.firstTs).toISOString().slice(0, 10);
     if (date < AIC_EFFECTIVE_DATE) continue;
@@ -462,6 +465,7 @@ function agentBilledCredits(session, calculator) {
       if (inCycle(date)) {
         agentByModelCycle.set(row.model, (agentByModelCycle.get(row.model) ?? 0) + row.credits);
         if (session.source === "omp") truthOmpCreditsCycle += row.credits;
+        else if (session.source === "pig") truthPigCreditsCycle += row.credits;
         else truthPiCreditsCycle += row.credits;
       }
     }
@@ -483,7 +487,7 @@ function agentBilledCredits(session, calculator) {
     fallbackByModelCycle.set(model, (fallbackByModelCycle.get(model) ?? 0) + usage.totalCredits);
   }
 
-  const truthTotalCreditsCycle = truthVSCodeCreditsCycle + truthOmpCreditsCycle + truthPiCreditsCycle;
+  const truthTotalCreditsCycle = truthVSCodeCreditsCycle + truthOmpCreditsCycle + truthPiCreditsCycle + truthPigCreditsCycle;
 
   // ─── Assertions ─────────────────────────────────────────────
   const checks = [];
@@ -500,6 +504,8 @@ function agentBilledCredits(session, calculator) {
     dash.agentSummary.ompTotalCredits, truthOmpCreditsCycle, 0.5, 0.01);
   within("Pi: agentSummary.piTotalCredits ↔ recomputed (cycle-scoped)",
     dash.agentSummary.piTotalCredits, truthPiCreditsCycle, 0.5, 0.01);
+  within("PiG: agentSummary.pigTotalCredits ↔ recomputed (cycle-scoped)",
+    dash.agentSummary.pigTotalCredits, truthPigCreditsCycle, 0.5, 0.01);
   within("TOTAL: aicSummary.totalCredits ↔ API/agent truth + fallback (cycle-scoped)",
     dash.aicSummary.totalCredits, truthTotalCreditsCycle + fallbackCreditsCycle, 0.5, 0.01 + raceCredits);
   within("agentSummary.totalCredits ↔ aicSummary.totalCredits (internal consistency)",

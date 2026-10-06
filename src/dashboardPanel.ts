@@ -694,8 +694,8 @@ function render() {
   const aicBudget = DATA.aicSummary ? DATA.aicSummary.monthlyBudget : 0;
   const ag = DATA.agentSummary;
   const aicSub = aicBudget > 0 ? aicTotal+'/'+aicBudget+' credits' : 'no budget set';
-  const aicSrcSub = (ag && (ag.ompSessions > 0 || ag.piSessions > 0 || ag.cliSessions > 0))
-    ? 'VS Code+OMP+Pi+CLI (all sources)'
+  const aicSrcSub = (ag && (ag.ompSessions > 0 || ag.piSessions > 0 || ag.pigSessions > 0 || ag.cliSessions > 0))
+    ? 'VS Code+OMP+Pi+PiG+CLI (all sources)'
     : aicSub;
 
   // Pre-AIC ranges: GitHub billed premium requests (turns × multiplier), not
@@ -1556,12 +1556,12 @@ function renderAgentSessions(agent, bounds, filteredSessions, rangeAicTotal) {
   const _q = DATA.aicSummary && DATA.aicSummary.quota;
   const unattributedAic = isCycleAlignedRange && _q && _q.localDelta > 0 ? _q.localDelta : 0;
   const vscodeAicCredits = isCycleAlignedRange && typeof rangeAicTotal === 'number'
-    ? Math.max(0, rangeAicTotal - unattributedAic - (agent.ompTotalCredits||0) - (agent.piTotalCredits||0) - cliDisplayCredits)
+    ? Math.max(0, rangeAicTotal - unattributedAic - (agent.ompTotalCredits||0) - (agent.piTotalCredits||0) - (agent.pigTotalCredits||0) - cliDisplayCredits)
     : filteredSessions.reduce((s,x) => s + sessionCreditsInRange(x, bounds), 0);
-  const hasAgentData = agent.ompSessions > 0 || agent.piSessions > 0 || agent.cliSessions > 0;
+  const hasAgentData = agent.ompSessions > 0 || agent.piSessions > 0 || agent.pigSessions > 0 || agent.cliSessions > 0;
   const agentNote = hasAgentData
     ? ''
-    : '<div style="margin-top:6px;font-size:11px;color:var(--muted)">No OMP, Pi, or GitHub Copilot CLI sessions found for this billing period. ' +
+    : '<div style="margin-top:6px;font-size:11px;color:var(--muted)">No OMP, Pi, PiG, or GitHub Copilot CLI sessions found for this billing period. ' +
       'Sessions will appear once activity is detected in ' +
       '<code>~/.omp/agent/sessions</code>, <code>~/.pi/agent/sessions</code>, or ' +
       '<code>~/.copilot/session-state</code>.</div>';
@@ -1588,20 +1588,20 @@ function renderAgentSessions(agent, bounds, filteredSessions, rangeAicTotal) {
       ' · home <code>' + esc(agent.cliCopilotHome || '~/.copilot') + '</code></div>'
     : '';
 
-  // Total row values — VS Code follows the selected range; OMP/Pi/CLI cover the
+  // Total row values — VS Code follows the selected range; OMP/Pi/PiG/CLI cover the
   // current billing cycle for every row (sessions, calls, tokens and credits),
   // because those scanners don't expose per-date granularity to the webview.
   // We DO NOT sum them into a single Total — mixing a filtered window with a
   // fixed one would be misleading. Show em-dash placeholder for Total when
   // any range other than all-time (or cycle-aligned 'tm') is selected.
   const isAllTimeRange = !bounds.start && !bounds.end;
-  const totalSess  = vscodeSessions + (agent.ompSessions||0) + (agent.piSessions||0) + (agent.cliSessions||0);
-  const totalCalls = vscodeTurns + (agent.ompLlmCalls||0) + (agent.piLlmCalls||0) + (agent.cliLlmCalls||0);
-  const totalTok   = vscodeTotalTokens + (agent.ompTotalTokens||0) + (agent.piTotalTokens||0) + (agent.cliTotalTokens||0);
-  const totalAIC   = fmtAIC(vscodeAicCredits + (agent.ompTotalCredits||0) + (agent.piTotalCredits||0) + cliDisplayCredits + unattributedAic);
+  const totalSess  = vscodeSessions + (agent.ompSessions||0) + (agent.piSessions||0) + (agent.pigSessions||0) + (agent.cliSessions||0);
+  const totalCalls = vscodeTurns + (agent.ompLlmCalls||0) + (agent.piLlmCalls||0) + (agent.pigLlmCalls||0) + (agent.cliLlmCalls||0);
+  const totalTok   = vscodeTotalTokens + (agent.ompTotalTokens||0) + (agent.piTotalTokens||0) + (agent.pigTotalTokens||0) + (agent.cliTotalTokens||0);
+  const totalAIC   = fmtAIC(vscodeAicCredits + (agent.ompTotalCredits||0) + (agent.piTotalCredits||0) + (agent.pigTotalCredits||0) + cliDisplayCredits + unattributedAic);
   const totalCell = v => isCycleAlignedRange
     ? '<td class="num orange"><strong>'+v+'</strong></td>'
-    : '<td class="num" style="color:var(--muted)" title="VS Code follows the selected range; OMP/Pi/CLI cover the current cycle — a combined total would mix time windows">—</td>';
+    : '<td class="num" style="color:var(--muted)" title="VS Code follows the selected range; OMP/Pi/PiG/CLI cover the current cycle — a combined total would mix time windows">—</td>';
 
   const fmtTok = v => {
     if (v >= 1e9) return (v/1e9).toFixed(2)+'B';
@@ -1625,6 +1625,7 @@ function renderAgentSessions(agent, bounds, filteredSessions, rangeAicTotal) {
       '<td class="num">'+vscodeSessions+'</td>' +
       '<td class="num">'+(agent.ompSessions||0)+'</td>' +
       '<td class="num">'+(agent.piSessions||0)+'</td>' +
+      '<td class="num">'+(agent.pigSessions||0)+'</td>' +
       '<td class="num">'+(agent.cliSessions||0)+'</td>' +
       unattrDash +
       totalCell(totalSess) +
@@ -1634,15 +1635,17 @@ function renderAgentSessions(agent, bounds, filteredSessions, rangeAicTotal) {
       '<td class="num">'+vscodeTurns.toLocaleString()+'</td>' +
       '<td class="num">'+(agent.ompLlmCalls||0).toLocaleString()+'</td>' +
       '<td class="num">'+(agent.piLlmCalls||0).toLocaleString()+'</td>' +
+      '<td class="num">'+(agent.pigLlmCalls||0).toLocaleString()+'</td>' +
       '<td class="num" title="User prompts in the billing window (slash commands excluded)">'+(agent.cliLlmCalls||0).toLocaleString()+'</td>' +
       unattrDash +
       totalCell(totalCalls.toLocaleString()) +
     '</tr>' +
     '<tr>' +
-      '<td>Tokens — prompt + output <span style="font-size:10px;color:var(--muted)">(VS Code: range filtered · OMP/Pi/CLI: this cycle)</span></td>' +
+      '<td>Tokens — prompt + output <span style="font-size:10px;color:var(--muted)">(VS Code: range filtered · OMP/Pi/PiG/CLI: this cycle)</span></td>' +
       '<td class="num" title="Tokens from range-filtered VS Code sessions">'+fmtTok(vscodeTotalTokens)+'</td>' +
       '<td class="num" title="OMP agent tokens this billing cycle, subagents included">'+fmtTok(agent.ompTotalTokens||0)+'</td>' +
       '<td class="num" title="Pi agent tokens this billing cycle">'+fmtTok(agent.piTotalTokens||0)+'</td>' +
+      '<td class="num" title="PiG agent tokens this billing cycle">'+fmtTok(agent.pigTotalTokens||0)+'</td>' +
       '<td class="num" title="CLI live output tokens this billing cycle (from assistant.message events)">'+fmtTok(agent.cliTotalTokens||0)+'</td>' +
       unattrDash +
       totalCell(fmtTok(totalTok)) +
@@ -1652,6 +1655,7 @@ function renderAgentSessions(agent, bounds, filteredSessions, rangeAicTotal) {
       '<td class="num orange">'+fmtAIC(vscodeAicCredits)+'</td>' +
       '<td class="num orange">'+fmtAIC(agent.ompTotalCredits||0)+'</td>' +
       '<td class="num orange">'+fmtAIC(agent.piTotalCredits||0)+'</td>' +
+      '<td class="num orange">'+fmtAIC(agent.pigTotalCredits||0)+'</td>' +
       '<td class="num orange" title="API-billed totalNanoAiu from session.shutdown when present, else prompts × multiplier while live">'+fmtAIC(cliDisplayCredits)+'</td>' +
       unattrCell('<td class="num" style="color:var(--muted)">'+fmtAIC(unattributedAic)+'</td>') +
       totalCell(totalAIC) +
@@ -1662,6 +1666,7 @@ function renderAgentSessions(agent, bounds, filteredSessions, rangeAicTotal) {
     +   ' ' + srcBadge('VS Code','#0078d4')
     +   ' ' + srcBadge('OMP','#7c3aed')
     +   ' ' + srcBadge('Pi','#059669')
+    +   ' ' + srcBadge('PiG','#d97706')
     +   ' ' + srcBadge('CLI','#dc2626')
     + '</div>'
     + '<div class="section-subtitle">Per-source breakdown — all AIC credits feed into the shared billing budget above</div>'
@@ -1671,6 +1676,7 @@ function renderAgentSessions(agent, bounds, filteredSessions, rangeAicTotal) {
     +   '<th class="num" title="Range-filtered per current selection">VS Code <span style="font-size:9px;color:var(--muted);font-weight:400">(range)</span></th>'
     +   '<th class="num" title="Current billing cycle — OMP scanner does not expose per-date data to the webview">Oh My Pi <span style="font-size:9px;color:var(--muted);font-weight:400">(this cycle)</span></th>'
     +   '<th class="num" title="Current billing cycle — Pi scanner does not expose per-date data to the webview">Pi <span style="font-size:9px;color:var(--muted);font-weight:400">(this cycle)</span></th>'
+    +   '<th class="num" title="Current billing cycle — PiG (~/.pig) scanner does not expose per-date data to the webview">PiG <span style="font-size:9px;color:var(--muted);font-weight:400">(this cycle)</span></th>'
     +   '<th class="num" title="Current billing cycle — CLI scanner does not expose per-date data to the webview">Copilot CLI <span style="font-size:9px;color:var(--muted);font-weight:400">(this cycle)</span></th>'
     +   unattrCell('<th class="num" title="Billed by GitHub but present in no local log — other devices/IDEs, github.com, the cloud agent, or rotated-away logs. Not a source this machine can scan.">Unattributed <span style="font-size:9px;color:var(--muted);font-weight:400">(no local log)</span></th>')
     +   '<th class="num">Total</th>'

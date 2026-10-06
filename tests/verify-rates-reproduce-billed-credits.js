@@ -49,6 +49,24 @@ for (const [model, prompt, cached, output, billed] of BILLED) {
     Math.abs(c.totalCredits - billed) < 0.005, c.totalCredits.toFixed(4));
 }
 
+// Debug logs and OTel give only prompt and cached-read totals, so callers pass
+// no cache-write count. The estimator must still land on the billed figure:
+// uncached Anthropic input is a cache write. (Before, these came out 4-11% low.)
+for (const [model, prompt, cached, output, billed] of [
+  ...BILLED,
+  ["claude-haiku-4.5", 12000, 4000, 300, 12000 - 4000 > 0 ? (8000 * 125 + 4000 * 10 + 300 * 500) / 1e6 : 0],
+]) {
+  const c = calc.calculateCredits(model, prompt, output, cached);
+  assert(`${model} (prompt ${prompt}) estimated from prompt+cached alone`,
+    Math.abs(c.totalCredits - billed) < 0.005, c.totalCredits.toFixed(4));
+}
+{
+  const c = calc.calculateCredits("claude-opus-5", 1_000_000, 0, 900_000);
+  assert("uncached remainder stays in the Input column",
+    Math.abs(c.inputCredits - 62.5) < 1e-9 && Math.abs(c.cachedCredits - 45) < 1e-9,
+    `${c.inputCredits} / ${c.cachedCredits}`);
+}
+
 // GPT-5.6 Sol: the billed rows carry no cache-write tokens, so all non-cached
 // prompt tokens are plain input.
 for (const [prompt, cached, output, billed] of [

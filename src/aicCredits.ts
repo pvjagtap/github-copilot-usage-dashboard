@@ -560,7 +560,18 @@ export class AICCalculator {
     // (prompt_tokens from the API includes cached reads AND cache writes)
     const netInput = Math.max(0, inputTokens - cachedTokens - cacheWriteTokens);
 
-    const inputCredits = (netInput / 1_000_000) * rate.inputCreditsPerMillion;
+    // Anthropic bills every prompt token that was not read from cache as a cache
+    // WRITE. Debug logs and OTel report only prompt and cached-read totals, so
+    // with no cache-write breakdown the uncached remainder must be priced at the
+    // cache-write rate, not the plain input rate. Fitted against 4,263 billed
+    // requests (Opus 5 / 5.5, Sonnet 5, Haiku 4.5): uncached tokens cost exactly
+    // the cache-write rate with R^2 = 1.0000, where the input rate left every
+    // estimate 4-11% short. Credits stay in the Input column.
+    const uncachedRate =
+      cacheWriteTokens === 0 && rate.cacheWriteCreditsPerMillion > 0 && rate.model.toLowerCase().startsWith("claude")
+        ? rate.cacheWriteCreditsPerMillion
+        : rate.inputCreditsPerMillion;
+    const inputCredits = (netInput / 1_000_000) * uncachedRate;
     const outputCredits = (outputTokens / 1_000_000) * rate.outputCreditsPerMillion;
     const cachedCredits = (cachedTokens / 1_000_000) * rate.cachedInputCreditsPerMillion;
     const cacheWriteCredits = (cacheWriteTokens / 1_000_000) * rate.cacheWriteCreditsPerMillion;
