@@ -162,16 +162,21 @@ function buildData(): DashboardData {
       const day = (ts || "").slice(0, 10);
       return day >= aic.billingCycleStart && day <= aic.billingCycleEnd;
     };
-    const cycleTurns = scan.turns.filter(t => inCycle(t.timestamp));
+    // Sessions and turns use the same definition as the dashboard tiles: a
+    // conversation turn is one user request, not every tool round the debug
+    // log records, and an unused chat is not a session of usage.
+    const cycleSessions = cachedDashData.sessionsAll.filter(
+      s => inCycle(s.lastDate) && (s.turns > 0 || (s.aicCredits || 0) > 0),
+    );
     try {
       const machines = publishAndRead(extCtx, {
         cycleStart: aic.billingCycleStart,
         cycleCredits: aic.localTotalCredits,
         basis: "local",
-        sessions: new Set(cycleTurns.map(t => t.sessionId)).size,
-        turns: cycleTurns.length,
-        totalTokens: cycleTurns.reduce(
-          (s, t) => s + (t.debugPromptTokens || t.promptTokens) + (t.debugOutputTokens || t.outputTokens),
+        sessions: cycleSessions.length,
+        turns: cycleSessions.reduce((s, x) => s + x.turns, 0),
+        totalTokens: cycleSessions.reduce(
+          (s, x) => s + (x.actualPrompt || x.prompt) + (x.actualOutput || x.output),
           0,
         ),
         byDay,

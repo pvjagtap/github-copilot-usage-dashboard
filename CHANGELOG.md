@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.12] - 2026-10-06
+
+### Fixed
+
+- **Systems table disagreed with the dashboard tiles.** The rollup counted every
+  debug-log turn row (626 turns, 23 sessions) instead of conversation turns and
+  used-chat sessions (128 turns, 22 sessions) and summed tokens from a different
+  basis. It now uses the same definition as the tiles, so the per-system
+  sessions, turns and tokens match them.
+
 ## [1.11.11] - 2026-10-06
 
 ### Fixed
